@@ -5,16 +5,16 @@
 #include "fts-api-private.h"
 
 #define FTS_ELASTICSEARCH_USER_CONTEXT(obj) \
-	MODULE_CONTEXT(obj, fts_elasticsearch_user_module)
+    MODULE_CONTEXT(obj, fts_elasticsearch_user_module)
 
 struct fts_elasticsearch_settings {
-	bool debug;
-	const char *url;
+    bool debug;
+    const char *url;
 };
 
 struct fts_elasticsearch_user {
-	union mail_user_module_context module_ctx;
-	struct fts_elasticsearch_settings set;
+    union mail_user_module_context module_ctx;
+    struct fts_elasticsearch_settings set;
 };
 
 extern const char *fts_elasticsearch_plugin_dependencies[];
