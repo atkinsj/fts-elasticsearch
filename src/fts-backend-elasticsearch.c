@@ -417,7 +417,7 @@ elasticsearch_add_definite_query(struct mail_search_arg *arg, json_object *value
 
     /* TODO: can we wrap a query_string in a not filter? */
     if (arg->match_not)
-        i_debug("arg->match_not is true in SEARCH_HEADER_COMPRESS_LWSP");
+        i_debug("fts-elasticsearch: arg->match_not is true in SEARCH_HEADER_COMPRESS_LWSP");
 
     /* we always want to add a query value */
     json_object_object_add(value, "query", json_object_new_string(arg->value.str));
@@ -449,7 +449,7 @@ elasticsearch_add_definite_query_args(json_object *term, struct mail_search_arg 
 }
 
 /* 
- * called when an IMAP SEARCH is issued.
+ * TODO: determine what return values this should have.
  */
 static int
 fts_backend_elasticsearch_lookup(struct fts_backend *_backend, struct mailbox *box,
@@ -457,10 +457,6 @@ fts_backend_elasticsearch_lookup(struct fts_backend *_backend, struct mailbox *b
             enum fts_lookup_flags flags,
             struct fts_result *result)
 {
-
-    i_debug("fts-elasticsearch: lookup called");
-    i_debug("fts-elasticsearch: lookup: hdr_field_name: %s", args->hdr_field_name);
-
     struct elasticsearch_fts_backend *backend =
         (struct elasticsearch_fts_backend *)_backend;
 
@@ -468,6 +464,7 @@ fts_backend_elasticsearch_lookup(struct fts_backend *_backend, struct mailbox *b
     bool and_args = (flags & FTS_LOOKUP_FLAG_AND_ARGS) != 0;
     const char *box_guid;
     int ret;
+    struct elasticsearch_result **es_results;
     pool_t pool = pool_alloconly_create("fts elasticsearch search", 1024);
 
     if (fts_mailbox_get_guid(box, &box_guid) < 0)
@@ -479,35 +476,25 @@ fts_backend_elasticsearch_lookup(struct fts_backend *_backend, struct mailbox *b
 
     /* start building our query object */
     json_object *term = json_object_new_object();
-    
     elasticsearch_add_definite_query_args(term, args, and_args);
 
+    /* wrap it in the ES 'query' field */
     json_object *query = json_object_new_object();
     json_object_object_add(query, "query", term);
 
     /* TODO: we also need to support maybe_uid's */
 
     ret = elasticsearch_connection_select(backend->elasticsearch_conn, pool,
-        json_object_to_json_string(query), box_guid, result);
+        json_object_to_json_string(query), box_guid, &es_results);
 
+    /* build our fts_result return */
+    result->box = box;
+    result->scores_sorted = FALSE;
 
-
-    /*
-
-    ARRAY_TYPE(seq_range) uids;
-    ARRAY_TYPE(fts_score_map) scores;
-
-    struct fts_score_map score;
-    score.uid = 42;
-    score.score = 100;
-    i_array_init(&uids, 1);
-    i_array_init(&scores, 1);
-
-
-    array_append_array(&result->definite_uids, &uids);
-    array_append_array(&result->scores, &scores);*/
-
-    /*args->match_always = TRUE;*/
+    if (ret) {
+        array_append_array(&result->definite_uids, &es_results[0]->uids);
+        array_append_array(&result->scores, &es_results[0]->scores);
+    }
 
     return 1;
 }

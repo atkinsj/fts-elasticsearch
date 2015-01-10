@@ -25,6 +25,16 @@ struct elasticsearch_connection_post {
     unsigned int failed:1;
 };
 
+struct elasticsearch_lookup_context {
+    pool_t result_pool;
+    HASH_TABLE(char *, struct elasticsearch_result *) mailboxes;
+    ARRAY(struct elasticsearch_result *) results;
+    int uid;
+    float score;
+    const char *box_guid;
+    bool results_found;
+};
+
 struct elasticsearch_connection {
     char *http_host;
     in_port_t http_port;
@@ -36,7 +46,8 @@ struct elasticsearch_connection {
     struct istream *payload;
     struct io *io;
 
-    struct fts_result *results;
+    /* TODO: should probably move this out to a lookup context struct */
+    struct elasticsearch_lookup_context *ctx;
 
     unsigned int debug:1;
     unsigned int posting:1;
@@ -128,8 +139,6 @@ int elasticsearch_connection_post(struct elasticsearch_connection *conn,
 
     http_req = elasticsearch_connection_post_request(conn, box_guid, message_uid);
 
-    /*debug("POSTING: %s\n", cmd);*/
-
     post_payload = i_stream_create_from_data(cmd, strlen(cmd));
 
     http_client_request_set_payload(http_req, post_payload, TRUE);
@@ -171,7 +180,7 @@ void json_parse_array(json_object *jobj, char *key, struct elasticsearch_connect
             json_parse_array(jvalue, NULL, conn);
         }
         else if (type != json_type_object) {
-            i_debug("value[%d]: ", i);
+            /* TODO :what do we do here? */
         }
         else {
             json_parse(jvalue, conn);
@@ -179,46 +188,58 @@ void json_parse_array(json_object *jobj, char *key, struct elasticsearch_connect
     }
 }
 
-void json_parse_result(json_object *source)
+static struct elasticsearch_result *
+elasticsearch_result_get(struct elasticsearch_connection *conn, const char *box_id)
 {
-/*    result = p_new(ctx->result_pool, struct elasticsearch_result, 1);
+    struct elasticsearch_result * result;
+    char *box_id_dup;
+    result = hash_table_lookup(conn->ctx->mailboxes, box_id);
+    if (result != NULL)
+        return result;
+
+    box_id_dup = p_strdup(conn->ctx->result_pool, box_id);
+    result = p_new(conn->ctx->result_pool, struct elasticsearch_result, 1);
     result->box_id = box_id_dup;
-    p_array_init(&result->uids, ctx->result_pool, 32);
-    p_array_init(&result->scores, ctx->result_pool, 32);
-    hash_table_insert(ctx->mailboxes, box_id_dup, result);
-    array_append(&ctx->results, &result, 1);*/
+
+    p_array_init(&result->uids, conn->ctx->result_pool, 32);
+    p_array_init(&result->scores, conn->ctx->result_pool, 32);
+    hash_table_insert(conn->ctx->mailboxes, box_id_dup, result);
+    array_append(&conn->ctx->results, &result, 1);
+
+    return result;
 }
 
 void json_parse(json_object * jobj, struct elasticsearch_connection *conn)
 {
     enum json_type type;
 
-    ARRAY_TYPE(seq_range) tmp_definite_uids, tmp_maybe_uids;
-    i_array_init(&tmp_definite_uids, 128);
-    i_array_init(&tmp_maybe_uids, 128);
-
-    int uid = -1;
-    double score = -1;
-
     json_object_object_foreach(jobj, key, val) {
         json_object * temp;
         type = json_object_get_type(val);
 
+        if (strcmp(key, "uid") == 0)
+            conn->ctx->uid = json_object_get_int(val);
+
         if (strcmp(key, "_score") == 0)
-            score = json_object_get_double(val);
+            conn->ctx->score = json_object_get_double(val);  
 
-        if (strcmp(key, "uid") == 0) {
-            uid = json_object_get_int(val);
-
-        }
+        if (strcmp(key, "box") == 0)
+            conn->ctx->box_guid = i_strdup(json_object_get_string(val));
 
         /* this is all we need for an e-mail result */
-        if (uid != -1 && score != -1) {
-/*            struct fts_score_map *score = array_append_space(&result->scores);*/
+        if (conn->ctx->uid != -1 && conn->ctx->score != -1 && conn->ctx->box_guid != NULL) {
+            struct elasticsearch_result * result = elasticsearch_result_get(conn, conn->ctx->box_guid);
+            struct fts_score_map *tmp_score = array_append_space(&result->scores);
+
+            seq_range_array_add(&result->uids, conn->ctx->uid);
+            tmp_score->uid = conn->ctx->uid;
+            tmp_score->score = conn->ctx->score;
 
             /* clean-up */
-            uid = -1;
-            score = -1;
+            conn->ctx->uid = -1;
+            conn->ctx->score = -1;
+            conn->ctx->box_guid = NULL;
+            conn->ctx->results_found = TRUE;
         }
 
         switch (type) {
@@ -232,7 +253,7 @@ void json_parse(json_object * jobj, struct elasticsearch_connection *conn)
             json_object_object_get_ex(jobj, key, &temp);
 #else
             temp = json_object_object_get(jobj, key);
-#endif  
+#endif
             
             json_parse(temp, conn);
 
@@ -306,13 +327,28 @@ elasticsearch_connection_select_response(const struct http_response *response,
 }
 
 int elasticsearch_connection_select(struct elasticsearch_connection *conn, pool_t pool,
-    const char *query, const char *box_guid, struct fts_result *box_results_r)
+    const char *query, const char *box_guid, struct elasticsearch_result ***box_results_r)
 {
     struct http_client_request *http_req;
     struct istream *post_payload;
+    struct elasticsearch_lookup_context lookup_context;
     const char *url;
     int parse_ret;
 
+    /* set-up the context */
+    memset(&lookup_context, 0, sizeof(lookup_context));
+    conn->ctx = &lookup_context;
+    conn->ctx->result_pool = pool;
+    conn->ctx->uid = -1;
+    conn->ctx->score = -1;
+    conn->ctx->results_found = FALSE;
+
+    p_array_init(&conn->ctx->results, pool, 32);
+    
+    hash_table_create(&lookup_context.mailboxes, default_pool, 0, str_hash, strcmp);
+
+    /* build the url */
+    /* TODO: this should really be configurable */
     url = t_strconcat(conn->http_base_url, box_guid, NULL);
     url = t_strconcat(url, "/mail/_search/", NULL);
 
@@ -323,14 +359,9 @@ int elasticsearch_connection_select(struct elasticsearch_connection *conn, pool_
     http_client_request_set_ssl(http_req, conn->http_ssl);
     http_client_request_add_header(http_req, "Content-Type", "text/json");
 
-    i_debug("POSTING: %s", query);
-
     post_payload = i_stream_create_from_data(query, strlen(query));
-
     http_client_request_set_payload(http_req, post_payload, TRUE);
-
     i_stream_unref(&post_payload);
-
     http_client_request_submit(http_req);
 
     conn->request_status = 0;
@@ -341,7 +372,12 @@ int elasticsearch_connection_select(struct elasticsearch_connection *conn, pool_
         return -1;
 
     /* build our results to push back to the fts api */
-    
+    array_append_zero(&conn->ctx->results);
+    *box_results_r = array_idx_modifiable(&conn->ctx->results, 0);
 
-    return 0;
+    if (conn->ctx->results_found)
+        return 1;
+    else
+        return 0;
+    
 }
