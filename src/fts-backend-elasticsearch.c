@@ -394,9 +394,9 @@ elasticsearch_add_definite_query(struct mail_search_arg *arg, json_object *value
     case SEARCH_HEADER_ADDRESS: /* fall through */
     case SEARCH_HEADER_COMPRESS_LWSP:
         if (!fts_header_want_indexed(arg->hdr_field_name))
-            return FALSE;        
+            return FALSE;
 
-        json_object_array_add(fields, json_object_new_string(arg->hdr_field_name));
+        json_object_array_add(fields, json_object_new_string(t_str_lcase(arg->hdr_field_name)));
 
         break;
     default:
@@ -443,6 +443,7 @@ fts_backend_elasticsearch_lookup(struct fts_backend *_backend, struct mailbox *b
             enum fts_lookup_flags flags,
             struct fts_result *result)
 {
+    i_debug("lookup called");
     struct elasticsearch_fts_backend *backend =
         (struct elasticsearch_fts_backend *)_backend;
 

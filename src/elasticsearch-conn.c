@@ -119,8 +119,6 @@ elasticsearch_connection_post_request(struct elasticsearch_connection *conn)
     struct http_client_request *http_req;
     const char *url;
 
-    i_debug("UPDATE CALLED!?");
-
     url = t_strconcat(conn->http_base_url, "/_bulk/", NULL);
 
     http_req = http_client_request(elasticsearch_http_client, "POST",
