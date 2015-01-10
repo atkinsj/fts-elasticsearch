@@ -352,7 +352,7 @@ static void
 fts_backend_elasticsearch_update_expunge(struct fts_backend_update_context *ctx, uint32_t uid)
 {
     i_debug("fts-elasticsearch: update_expunge called");
-    /* TODO */
+    /* TODO: called when a message moves from one mailbox to another (atleast) */
     return;
 }
 
@@ -413,16 +413,19 @@ elasticsearch_add_definite_query(struct mail_search_arg *arg, json_object *value
     return TRUE;
 }
 
-static void
+static bool
 elasticsearch_add_definite_query_args(json_object *term, struct mail_search_arg *arg,
                         bool and_args)
 {
+    bool field_added = FALSE;
+
     for (; arg != NULL; arg = arg->next) {
         json_object *value = json_object_new_object();
         json_object *fields = json_object_new_array();
 
         if (elasticsearch_add_definite_query(arg, value, fields)) {
             arg->match_always = TRUE;
+            field_added = TRUE;
 
             json_object_object_add(value, "fields", fields);
             json_object_object_add(term, "query_string", value);
@@ -432,11 +435,13 @@ elasticsearch_add_definite_query_args(json_object *term, struct mail_search_arg 
             }
         }
     }
+
+    /* false indicates that we didn't add anything; at the very least
+     * this happens when multiple fields are specified in the search. */
+    /* TODO: investigate if Dovecot supports multi-field searching. */
+    return field_added;
 }
 
-/* 
- * TODO: determine what return values this should have.
- */
 static int
 fts_backend_elasticsearch_lookup(struct fts_backend *_backend, struct mailbox *box,
             struct mail_search_arg *args,
@@ -464,7 +469,12 @@ fts_backend_elasticsearch_lookup(struct fts_backend *_backend, struct mailbox *b
 
     /* start building our query object */
     json_object *term = json_object_new_object();
-    elasticsearch_add_definite_query_args(term, args, and_args);
+    bool valid_search = elasticsearch_add_definite_query_args(term, args, and_args);
+
+    if (!valid_search) {
+        /* TODO: what should we return here? */
+        return -1;
+    }
 
     /* wrap it in the ES 'query' field */
     json_object *query = json_object_new_object();
@@ -479,8 +489,13 @@ fts_backend_elasticsearch_lookup(struct fts_backend *_backend, struct mailbox *b
     result->box = box;
     result->scores_sorted = FALSE;
 
-    if (ret) {
-        array_append_array(&result->definite_uids, &es_results[0]->uids);
+    /* FTS_LOOKUP_FLAG_NO_AUTO_FUZZY says that exact matches for non-fuzzy searches
+     * should go to maybe_uids instead of definite_uids. */
+    ARRAY_TYPE(seq_range) *uids_arr = (flags & FTS_LOOKUP_FLAG_NO_AUTO_FUZZY) == 0 ?
+            &result->definite_uids : &result->maybe_uids;
+
+    if (ret > 0) {
+        array_append_array(uids_arr, &es_results[0]->uids);
         array_append_array(&result->scores, &es_results[0]->scores);
     }
 
