@@ -21,4 +21,4 @@ rm -f *.tar.* *.tgz
 rm -Rf autom4te.cache
 
 # Remove rest of the generated files.
-rm -f Makefile.in aclocal.m4 configure depcomp install-sh missing compile config.guess config.sub
+rm -f Makefile.in aclocal.m4 configure depcomp install-sh missing compile config.guess config.sub src/Makefile.in dummy-config.h.in~
