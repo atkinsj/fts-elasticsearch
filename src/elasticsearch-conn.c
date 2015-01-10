@@ -152,7 +152,11 @@ void json_parse_array(json_object *jobj, char *key, struct elasticsearch_connect
     json_object *jarray = jobj; 
 
     if (key) {
+#if JSON_HAS_GET_EX
         json_object_object_get_ex(jobj, key, &jarray);
+#else
+        jarray = json_object_object_get(jobj, key);
+#endif
     }
 
     int arraylen = json_object_array_length(jarray);
@@ -224,8 +228,12 @@ void json_parse(json_object * jobj, struct elasticsearch_connection *conn)
         case json_type_string:  /* fall through */
             break; 
         case json_type_object:
+#if JSON_HAS_GET_EX
             json_object_object_get_ex(jobj, key, &temp);
-
+#else
+            temp = json_object_object_get(jobj, key);
+#endif  
+            
             json_parse(temp, conn);
 
             break;

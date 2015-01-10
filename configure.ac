@@ -34,6 +34,8 @@ AC_DISABLE_STATIC
 AC_PROG_CC
 
 # Checks for libraries.
+AC_SEARCH_LIBS([json_object_from_file], [json json-c], [], [ AC_MSG_ERROR([no json-c available]) ])
+AC_SEARCH_LIBS([json_object_object_get_ex], [json json-c], [ AC_DEFINE([JSON_HAS_GET_EX], [1], [Define if we have json_object_object_get_ex])], [])
 
 # Checks for header files.
 AC_CHECK_HEADERS([inttypes.h stdlib.h syslog.h unistd.h])
