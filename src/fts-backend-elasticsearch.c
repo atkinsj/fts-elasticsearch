@@ -164,7 +164,7 @@ fts_backend_elasticsearch_update_deinit(struct fts_backend_update_context *_ctx)
     fts_backend_elasticsearch_doc_close(ctx);
 
     /* do our bulk post */
-    elasticsearch_connection_post(backend->elasticsearch_conn, str_c(ctx->json_request), ctx->box_guid, ctx->prev_uid);
+    elasticsearch_connection_post(backend->elasticsearch_conn, str_c(ctx->json_request));
 
     i_free(ctx);
     
@@ -258,8 +258,6 @@ fts_backend_elasticsearch_uid_changed(struct elasticsearch_fts_backend_update_co
     /* post is 0, this is the first message TODO: should use documents_added = true? */
     if (ctx->post == 0) {
         i_assert(ctx->prev_uid == 0);
-
-        i_debug("uid changed");
 
         ctx->current_field = str_new(default_pool, 1024 * 64);
         ctx->temp = str_new(default_pool, 1024 * 64);
@@ -360,8 +358,7 @@ fts_backend_elasticsearch_update_expunge(struct fts_backend_update_context *ctx,
 
 static int fts_backend_elasticsearch_refresh(struct fts_backend *backend ATTR_UNUSED)
 {
-    i_debug("fts-elasticsearch: refresh called");
-    /* TODO */
+    /* no value in implementing this with ElasticSearch as it handles caching. */
     return 0;
 }
 
@@ -374,16 +371,7 @@ static int fts_backend_elasticsearch_rescan(struct fts_backend *backend)
 
 static int fts_backend_elasticsearch_optimize(struct fts_backend *backend ATTR_UNUSED)
 {
-    i_debug("fts-elasticsearch: optimise called");
-    /* TODO */
-    return 0;
-}
-
-static int
-elasticsearch_search(const struct mailbox *box, const char *terms,
-               ARRAY_TYPE(seq_range) *uids)
-{
-    /* TODO: */
+    /* TODO: are there any optimisations we can do here? */
     return 0;
 }
 
@@ -440,9 +428,7 @@ elasticsearch_add_definite_query_args(json_object *term, struct mail_search_arg 
             json_object_object_add(term, "query_string", value);
 
             if (and_args) {
-                i_debug("and args is true");
-
-                /* TODO: figure out what this relates to. */
+                /* TODO: build the syntax for OR in JSON */
             }
         }
     }
@@ -460,11 +446,12 @@ fts_backend_elasticsearch_lookup(struct fts_backend *_backend, struct mailbox *b
     struct elasticsearch_fts_backend *backend =
         (struct elasticsearch_fts_backend *)_backend;
 
-    struct mailbox_status status;
+    struct elasticsearch_result **es_results;
     bool and_args = (flags & FTS_LOOKUP_FLAG_AND_ARGS) != 0;
+    struct mailbox_status status;
     const char *box_guid;
     int ret;
-    struct elasticsearch_result **es_results;
+
     pool_t pool = pool_alloconly_create("fts elasticsearch search", 1024);
 
     if (fts_mailbox_get_guid(box, &box_guid) < 0)
@@ -497,17 +484,6 @@ fts_backend_elasticsearch_lookup(struct fts_backend *_backend, struct mailbox *b
     }
 
     return 1;
-}
-
-static int
-elasticsearch_search_multi(struct fts_backend *_backend, string_t *str,
-          struct mailbox *const boxes[],
-          struct fts_multi_result *result)
-{
-    i_debug("fts-elasticsearch: search_multi called");
-
-
-    return 0;
 }
 
 static int

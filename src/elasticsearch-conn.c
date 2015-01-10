@@ -114,11 +114,12 @@ elasticsearch_connection_update_response(const struct http_response *response,
 }
 
 static struct http_client_request *
-elasticsearch_connection_post_request(struct elasticsearch_connection *conn,
-    const char * box_guid, const uint32_t message_uid)
+elasticsearch_connection_post_request(struct elasticsearch_connection *conn)
 {
     struct http_client_request *http_req;
     const char *url;
+
+    i_debug("UPDATE CALLED!?");
 
     url = t_strconcat(conn->http_base_url, "/_bulk/", NULL);
 
@@ -128,16 +129,17 @@ elasticsearch_connection_post_request(struct elasticsearch_connection *conn,
     http_client_request_set_port(http_req, conn->http_port);
     http_client_request_set_ssl(http_req, conn->http_ssl);
     http_client_request_add_header(http_req, "Content-Type", "text/json");
+
     return http_req;
 }
 
 int elasticsearch_connection_post(struct elasticsearch_connection *conn,
-    const char *cmd, const char * box_guid, const uint32_t message_uid)
+    const char *cmd)
 {
     struct http_client_request *http_req;
     struct istream *post_payload;
 
-    http_req = elasticsearch_connection_post_request(conn, box_guid, message_uid);
+    http_req = elasticsearch_connection_post_request(conn);
 
     post_payload = i_stream_create_from_data(cmd, strlen(cmd));
 
@@ -270,7 +272,7 @@ void json_parse(json_object * jobj, struct elasticsearch_connection *conn)
 } 
 
 static int elasticsearch_json_parse(struct elasticsearch_connection *conn,
-              const void *data, size_t size, bool done)
+              const void *data)
 {
     json_object * jobj = json_tokener_parse(data); 
     json_parse(jobj, conn);
@@ -285,7 +287,7 @@ static void elasticsearch_connection_payload_input(struct elasticsearch_connecti
     int ret;
 
     while ((ret = i_stream_read_data(conn->payload, &data, &size, 0)) > 0) {
-        (void)elasticsearch_json_parse(conn, data, size, FALSE);
+        (void)elasticsearch_json_parse(conn, data);
 
         i_stream_skip(conn->payload, size);
     }
@@ -333,7 +335,6 @@ int elasticsearch_connection_select(struct elasticsearch_connection *conn, pool_
     struct istream *post_payload;
     struct elasticsearch_lookup_context lookup_context;
     const char *url;
-    int parse_ret;
 
     /* set-up the context */
     memset(&lookup_context, 0, sizeof(lookup_context));
@@ -379,5 +380,4 @@ int elasticsearch_connection_select(struct elasticsearch_connection *conn, pool_
         return 1;
     else
         return 0;
-    
 }
