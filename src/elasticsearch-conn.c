@@ -36,6 +36,8 @@ struct elasticsearch_connection {
     struct istream *payload;
     struct io *io;
 
+    struct fts_result *results;
+
     unsigned int debug:1;
     unsigned int posting:1;
     unsigned int xml_failed:1;
@@ -143,40 +145,179 @@ int elasticsearch_connection_post(struct elasticsearch_connection *conn,
     return conn->request_status;
 }
 
+void json_parse_array(json_object *jobj, char *key, struct elasticsearch_connection *conn)
+{
+    enum json_type type;
+
+    json_object *jarray = jobj; 
+
+    if (key) {
+        json_object_object_get_ex(jobj, key, &jarray);
+    }
+
+    int arraylen = json_object_array_length(jarray);
+    int i;
+    json_object * jvalue;
+
+    for (i = 0; i < arraylen; i++) {
+        jvalue = json_object_array_get_idx(jarray, i);
+        type = json_object_get_type(jvalue);
+
+        if (type == json_type_array) {
+            json_parse_array(jvalue, NULL, conn);
+        }
+        else if (type != json_type_object) {
+            i_debug("value[%d]: ", i);
+        }
+        else {
+            json_parse(jvalue, conn);
+        }
+    }
+}
+
+void json_parse_result(json_object *source)
+{
+/*    result = p_new(ctx->result_pool, struct elasticsearch_result, 1);
+    result->box_id = box_id_dup;
+    p_array_init(&result->uids, ctx->result_pool, 32);
+    p_array_init(&result->scores, ctx->result_pool, 32);
+    hash_table_insert(ctx->mailboxes, box_id_dup, result);
+    array_append(&ctx->results, &result, 1);*/
+}
+
+void json_parse(json_object * jobj, struct elasticsearch_connection *conn)
+{
+    enum json_type type;
+
+    ARRAY_TYPE(seq_range) tmp_definite_uids, tmp_maybe_uids;
+    i_array_init(&tmp_definite_uids, 128);
+    i_array_init(&tmp_maybe_uids, 128);
+
+    int uid = -1;
+    double score = -1;
+
+    json_object_object_foreach(jobj, key, val) {
+        json_object * temp;
+        type = json_object_get_type(val);
+
+        if (strcmp(key, "_score") == 0)
+            score = json_object_get_double(val);
+
+        if (strcmp(key, "uid") == 0) {
+            uid = json_object_get_int(val);
+
+        }
+
+        /* this is all we need for an e-mail result */
+        if (uid != -1 && score != -1) {
+/*            struct fts_score_map *score = array_append_space(&result->scores);*/
+
+            /* clean-up */
+            uid = -1;
+            score = -1;
+        }
+
+        switch (type) {
+        case json_type_boolean: /* fall through */
+        case json_type_double:  /* fall through */
+        case json_type_int:     /* fall through */
+        case json_type_string:  /* fall through */
+            break; 
+        case json_type_object:
+            json_object_object_get_ex(jobj, key, &temp);
+
+            json_parse(temp, conn);
+
+            break;
+        case json_type_array:
+            json_parse_array(jobj, key, conn);
+
+            break;
+        case json_type_null:
+            i_error("fts-elasticsearch: Invalid JSON returned from ElasticSearch");
+            break;
+        }
+    }
+} 
+
+static int elasticsearch_json_parse(struct elasticsearch_connection *conn,
+              const void *data, size_t size, bool done)
+{
+    json_object * jobj = json_tokener_parse(data); 
+    json_parse(jobj, conn);
+
+    return 0;
+}
+
+static void elasticsearch_connection_payload_input(struct elasticsearch_connection *conn)
+{
+    const unsigned char *data;
+    size_t size;
+    int ret;
+
+    while ((ret = i_stream_read_data(conn->payload, &data, &size, 0)) > 0) {
+        (void)elasticsearch_json_parse(conn, data, size, FALSE);
+
+        i_stream_skip(conn->payload, size);
+    }
+
+    if (ret == 0) {
+        /* we will be called again for more data */
+    } else {
+        if (conn->payload->stream_errno != 0) {
+            i_error("fts_elasticsearch: failed to read payload from HTTP server: %m");
+            conn->request_status = -1;
+        }
+        io_remove(&conn->io);
+        i_stream_unref(&conn->payload);
+    }
+}
+
 static void
 elasticsearch_connection_select_response(const struct http_response *response,
                 struct elasticsearch_connection *conn)
 {
+    if (response->status / 100 != 2) {
+        i_error("fts_elasticsearch: lookup failed: %s", response->reason);
+        conn->request_status = -1;
+        return;
+    }
 
+    if (response->payload == NULL) {
+        i_error("fts_elasticsearch: lookup failed: empty response payload");
+        conn->request_status = -1;
+        return;
+    }
+
+    /* TODO: read up in the dovecot source to see how we should clean these up
+     * as they are cuasing I/O leaks. */
+    i_stream_ref(response->payload);
+    conn->payload = response->payload;
+    conn->io = io_add_istream(response->payload, elasticsearch_connection_payload_input, conn);
+    elasticsearch_connection_payload_input(conn);
 }
 
-int elasticsearch_connection_select(struct elasticsearch_connection *conn,
-    const char *query, const char *box_guid, struct elasticsearch_result ***box_results_r)
+int elasticsearch_connection_select(struct elasticsearch_connection *conn, pool_t pool,
+    const char *query, const char *box_guid, struct fts_result *box_results_r)
 {
     struct http_client_request *http_req;
     struct istream *post_payload;
     const char *url;
+    int parse_ret;
 
     url = t_strconcat(conn->http_base_url, box_guid, NULL);
-    url = t_strconcat(url, "/mail/_search", NULL);
-
-    i_debug("search query: %s", query);
-    i_debug("hitting url: %s", url);
-
-    /*
-
-    
+    url = t_strconcat(url, "/mail/_search/", NULL);
 
     http_req = http_client_request(elasticsearch_http_client, "POST",
                        conn->http_host, url,
-                       elasticsearch_connection_update_response, conn);
+                       elasticsearch_connection_select_response, conn);
     http_client_request_set_port(http_req, conn->http_port);
     http_client_request_set_ssl(http_req, conn->http_ssl);
-    http_client_request_add_header(http_req, "Content-Type", "text/json");*/
+    http_client_request_add_header(http_req, "Content-Type", "text/json");
 
-    /*debug("GETTING: %s\n", query);*/
+    i_debug("POSTING: %s", query);
 
-    /*post_payload = i_stream_create_from_data(query, strlen(query));
+    post_payload = i_stream_create_from_data(query, strlen(query));
 
     http_client_request_set_payload(http_req, post_payload, TRUE);
 
@@ -188,5 +329,11 @@ int elasticsearch_connection_select(struct elasticsearch_connection *conn,
 
     http_client_wait(elasticsearch_http_client);
 
-    return conn->request_status;*/
+    if (conn->request_status < 0) 
+        return -1;
+
+    /* build our results to push back to the fts api */
+    
+
+    return 0;
 }

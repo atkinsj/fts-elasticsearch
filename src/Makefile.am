@@ -1,6 +1,8 @@
 AM_CFLAGS= \
 	-I../../dovecot-2.2.15/src/plugins/fts \
-	$(LIBDOVECOT_INCLUDE)
+	$(LIBDOVECOT_INCLUDE) \
+    -Wno-unused-parameter \
+    -Wno-unused-variable
 
 AM_LDFLAGS= -ljson-c 
 

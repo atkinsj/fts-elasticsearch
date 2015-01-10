@@ -142,6 +142,7 @@ fts_backend_elasticsearch_get_last_uid(struct fts_backend *_backend,
 static struct fts_backend_update_context *
 fts_backend_elasticsearch_update_init(struct fts_backend *_backend)
 {
+    /* TODO: update_init only gets called when searching on text?? */
     struct elasticsearch_fts_backend_update_context *ctx;
 
     ctx = i_new(struct elasticsearch_fts_backend_update_context, 1);
@@ -201,7 +202,7 @@ fts_backend_elasticsearch_update_set_mailbox(struct fts_backend_update_context *
     } else {
         /* a box of null appears to indicate that indexing is complete. */
 
-        /* TODO: Figure out why fts-solr does this. don't we just blat over it later? */
+        /* TODO: Figure out why fts-elasticsearch does this. don't we just blat over it later? */
         /*memset(ctx->box_guid, 0, sizeof(ctx->box_guid));*/
     }
 
@@ -221,6 +222,9 @@ fts_backend_elasticsearch_doc_open(struct elasticsearch_fts_backend_update_conte
         (struct elasticsearch_fts_backend_update_context *)_ctx;
 
     ctx->documents_added = TRUE;
+
+    /* TODO: this json-c code must leak like crazy? i'm not sure how it handles
+     * reference counts. */
 
     json_object *temp = json_object_new_object();
 
@@ -292,7 +296,7 @@ fts_backend_elasticsearch_update_set_build_key(struct fts_backend_update_context
     case FTS_BACKEND_BUILD_KEY_MIME_HDR:
         /* TODO: we don't really want to append, there's probably some way to
          * instantiate a string_t from a const char *. */
-        str_append(ctx->current_field, key->hdr_name);
+        str_append(ctx->current_field, t_str_lcase(key->hdr_name));
 
         break;
     case FTS_BACKEND_BUILD_KEY_BODY_PART:
@@ -383,22 +387,66 @@ elasticsearch_search(const struct mailbox *box, const char *terms,
     return 0;
 }
 
-static bool solr_need_escaping(const char *str)
+static bool
+elasticsearch_add_definite_query(struct mail_search_arg *arg, json_object *value,
+                    json_object *fields)
 {
-    const char *solr_escape_chars = "+-&|!(){}[]^\"~*?:\\ ";
+    switch (arg->type) {
+    case SEARCH_TEXT:
+        /* we don't actually have to do anything here; leaving the fields
+         * array blank is sufficient to cause full text search with ES */
 
-    for (; *str != '\0'; str++) {
-        if (strchr(solr_escape_chars, *str) != NULL)
-            return TRUE;
+        break;
+    case SEARCH_BODY:
+        /* SEARCH_BODY has a hdr_field_name of null. */
+        json_object_array_add(fields, json_object_new_string("body"));
+
+        break;
+    case SEARCH_HEADER: /* fall through */
+    case SEARCH_HEADER_ADDRESS: /* fall through */
+    case SEARCH_HEADER_COMPRESS_LWSP:
+        if (!fts_header_want_indexed(arg->hdr_field_name))
+            return FALSE;        
+
+        json_object_array_add(fields, json_object_new_string(arg->hdr_field_name));
+
+        break;
+    default:
+        return FALSE;
     }
-    return FALSE;
+
+    /* TODO: can we wrap a query_string in a not filter? */
+    if (arg->match_not)
+        i_debug("arg->match_not is true in SEARCH_HEADER_COMPRESS_LWSP");
+
+    /* we always want to add a query value */
+    json_object_object_add(value, "query", json_object_new_string(arg->value.str));
+
+    return TRUE;
 }
 
-static void fts_backend_elasticsearch_all_fields(string_t *dest, const char *str)
+static void
+elasticsearch_add_definite_query_args(json_object *term, struct mail_search_arg *arg,
+                        bool and_args)
 {
+    for (; arg != NULL; arg = arg->next) {
+        json_object *value = json_object_new_object();
+        json_object *fields = json_object_new_array();
 
+        if (elasticsearch_add_definite_query(arg, value, fields)) {
+            arg->match_always = TRUE;
+
+            json_object_object_add(value, "fields", fields);
+            json_object_object_add(term, "query_string", value);
+
+            if (and_args) {
+                i_debug("and args is true");
+
+                /* TODO: figure out what this relates to. */
+            }
+        }
+    }
 }
-
 
 /* 
  * called when an IMAP SEARCH is issued.
@@ -418,11 +466,9 @@ fts_backend_elasticsearch_lookup(struct fts_backend *_backend, struct mailbox *b
 
     struct mailbox_status status;
     bool and_args = (flags & FTS_LOOKUP_FLAG_AND_ARGS) != 0;
-    string_t *str;
     const char *box_guid;
-    unsigned int prefix_len;
-    string_t *query = str_new(default_pool, 1024 * 64);
-    struct elasticsearch_results **elasticsearch_results;
+    int ret;
+    pool_t pool = pool_alloconly_create("fts elasticsearch search", 1024);
 
     if (fts_mailbox_get_guid(box, &box_guid) < 0)
         return -1;
@@ -430,14 +476,21 @@ fts_backend_elasticsearch_lookup(struct fts_backend *_backend, struct mailbox *b
     mailbox_get_open_status(box, STATUS_UIDNEXT, &status);
 
     /* TODO: pagination, status.uidnext shows where we're up to. */
+
+    /* start building our query object */
+    json_object *term = json_object_new_object();
     
-    /* hdr->field_name is NULL when 'text' is specified as the search field. */
-    if (args->hdr_field_name == NULL) {
-        fts_backend_elasticsearch_all_fields(str, )
-    }
+    elasticsearch_add_definite_query_args(term, args, and_args);
+
+    json_object *query = json_object_new_object();
+    json_object_object_add(query, "query", term);
+
+    /* TODO: we also need to support maybe_uid's */
+
+    ret = elasticsearch_connection_select(backend->elasticsearch_conn, pool,
+        json_object_to_json_string(query), box_guid, result);
 
 
-    elasticsearch_connection_select(backend->elasticsearch_conn, str_c(query), box_guid, &elasticsearch_results);
 
     /*
 
