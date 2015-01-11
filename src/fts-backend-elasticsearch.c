@@ -66,6 +66,7 @@ static int
 fts_backend_elasticsearch_init(struct fts_backend *_backend,
                          const char **error_r ATTR_UNUSED)
 {
+    i_debug("fts-elasticsearch: init called");
     struct elasticsearch_fts_backend *backend = (struct elasticsearch_fts_backend *)_backend;
     
     struct fts_elasticsearch_user *fuser =
@@ -84,6 +85,7 @@ fts_backend_elasticsearch_init(struct fts_backend *_backend,
 static void
 fts_backend_elasticsearch_deinit(struct fts_backend *_backend)
 {
+    i_debug("fts-elasticsearch: deinit called");
     struct elasticsearch_fts_backend *backend = (struct elasticsearch_fts_backend *)_backend;
 
     i_free(backend);
@@ -118,21 +120,35 @@ fts_backend_elasticsearch_get_last_uid(struct fts_backend *_backend,
                                  struct mailbox *box, uint32_t *last_uid_r)
 {
     struct elasticsearch_fts_backend *backend = (struct elasticsearch_fts_backend *)_backend;
-
     struct fts_index_header hdr;
 
-    /* this should return so long as dovecot's on-disk index is available */
-    if (fts_index_get_header(box, &hdr)) {
-        *last_uid_r = hdr.last_indexed_uid;
-
-        return 0;
+    /* build a JSON object to query the last uid */
+    /*
+    {
+      "fields": [
+        "_id"
+      ],
+      "query": {
+        "match_all": {
+          
+        }
+      },
+      "sort": {
+        "_id": "desc"
+      },
+      "size": 1
     }
+    */
 
-    i_debug("fts-elasticsearch: error in get_last_uid, fts_index_get_header returned false");
+    json_object *temp = json_object_new_object();
 
-    /* TODO: We shouldn't return 0 here; our elasticsearch index will almost
-     * certainly be more up to date. We need to crawl ES for the most recent
-     * UID we have */
+    json_object_object_add(temp, "id", json_object_new_string(ctx->box_guid));
+    json_object_object_add(temp, "_type", json_object_new_string("mail"));
+    json_object_object_add(temp, "_id", json_object_new_int(uid));
+
+
+
+    
     *last_uid_r = 0;
     (void)fts_index_set_last_uid(box, *last_uid_r);
 
@@ -142,6 +158,8 @@ fts_backend_elasticsearch_get_last_uid(struct fts_backend *_backend,
 static struct fts_backend_update_context *
 fts_backend_elasticsearch_update_init(struct fts_backend *_backend)
 {
+    i_debug("fts-elasticsearch: update_init called");
+
     /* TODO: update_init only gets called when searching on text?? */
     struct elasticsearch_fts_backend_update_context *ctx;
 
@@ -155,6 +173,7 @@ fts_backend_elasticsearch_update_init(struct fts_backend *_backend)
 static int
 fts_backend_elasticsearch_update_deinit(struct fts_backend_update_context *_ctx)
 {
+    i_debug("fts-elasticsearch: update_deinit called");
     struct elasticsearch_fts_backend_update_context *ctx =
         (struct elasticsearch_fts_backend_update_context *)_ctx;
     struct elasticsearch_fts_backend *backend =
@@ -164,7 +183,7 @@ fts_backend_elasticsearch_update_deinit(struct fts_backend_update_context *_ctx)
     fts_backend_elasticsearch_doc_close(ctx);
 
     /* do our bulk post */
-    elasticsearch_connection_post(backend->elasticsearch_conn, str_c(ctx->json_request));
+    elasticsearch_connection_update(backend->elasticsearch_conn, str_c(ctx->json_request));
 
     i_free(ctx);
     
@@ -178,6 +197,7 @@ static void
 fts_backend_elasticsearch_update_set_mailbox(struct fts_backend_update_context *_ctx,
                                        struct mailbox *box)
 {
+    i_debug("fts-elasticsearch: update_set_mailbox called");
     struct elasticsearch_fts_backend_update_context *ctx =
         (struct elasticsearch_fts_backend_update_context *)_ctx;
 
@@ -420,10 +440,15 @@ elasticsearch_add_definite_query_args(json_object *term, struct mail_search_arg 
     bool field_added = FALSE;
 
     for (; arg != NULL; arg = arg->next) {
+        i_debug("arg #");
+        i_debug("arg: %s", arg->hdr_field_name);
         json_object *value = json_object_new_object();
         json_object *fields = json_object_new_array();
 
         if (elasticsearch_add_definite_query(arg, value, fields)) {
+            /* this is important to set. if this is FALSE, Dovecot will fail
+             * over to its regular built-in search to produce results for
+             * this argument. */
             arg->match_always = TRUE;
             field_added = TRUE;
 
@@ -497,19 +522,21 @@ fts_backend_elasticsearch_lookup(struct fts_backend *_backend, struct mailbox *b
     if (ret > 0) {
         array_append_array(uids_arr, &es_results[0]->uids);
         array_append_array(&result->scores, &es_results[0]->scores);
-    }
+    } else
+        return -1;
 
-    return 1;
+    return 0;
 }
 
-static int
-fts_backend_elasticsearch_lookup_multi(struct fts_backend *backend,
-                  struct mailbox *const boxes[],
-                  struct mail_search_arg *args, bool and_args,
-                  struct fts_multi_result *result)
+int fts_backend_elasticsearch_lookup_multi(struct fts_backend *backend,
+    struct mailbox *const boxes[],
+    struct mail_search_arg *args,
+    enum fts_lookup_flags flags,
+    struct fts_multi_result *result)
 {
     i_debug("fts-elasticsearch: lookup multi called");
-    /* TODO */
+    /* TODO: has this been deprecated? testing with Roundcube, it calls _lookup multiple times
+     * once per mailbox. need to test with other clients. */
     return 0;
 }
 

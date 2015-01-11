@@ -17,14 +17,6 @@
 
 struct http_client *elasticsearch_http_client = NULL;
 
-struct elasticsearch_connection_post {
-    struct elasticsearch_connection *conn;
-
-    struct http_client_request *http_req;
-
-    unsigned int failed:1;
-};
-
 struct elasticsearch_lookup_context {
     pool_t result_pool;
     HASH_TABLE(char *, struct elasticsearch_result *) mailboxes;
@@ -45,6 +37,8 @@ struct elasticsearch_connection {
 
     struct istream *payload;
     struct io *io;
+
+    enum elasticsearch_post_type post_type;
 
     /* TODO: should probably move this out to a lookup context struct */
     struct elasticsearch_lookup_context *ctx;
@@ -113,31 +107,28 @@ elasticsearch_connection_update_response(const struct http_response *response,
     }
 }
 
-static struct http_client_request *
-elasticsearch_connection_post_request(struct elasticsearch_connection *conn)
+int elasticsearch_connection_update(struct elasticsearch_connection *conn,
+    const char *cmd)
 {
-    struct http_client_request *http_req;
-    const char *url;
+    /* set-up the connection */
+    conn->post_type = ELASTICSEARCH_POST_TYPE_UPDATE;
 
-    url = t_strconcat(conn->http_base_url, "/_bulk/", NULL);
+    const char *url = t_strconcat(conn->http_base_url, "/_bulk/", NULL);
 
-    http_req = http_client_request(elasticsearch_http_client, "POST",
-                       conn->http_host, url,
-                       elasticsearch_connection_update_response, conn);
-    http_client_request_set_port(http_req, conn->http_port);
-    http_client_request_set_ssl(http_req, conn->http_ssl);
-    http_client_request_add_header(http_req, "Content-Type", "text/json");
+    elasticsearch_connection_post(conn, url, cmd);
 
-    return http_req;
+    return conn->request_status;
 }
 
 int elasticsearch_connection_post(struct elasticsearch_connection *conn,
-    const char *cmd)
+    const char *url, const char *cmd)
 {
     struct http_client_request *http_req;
     struct istream *post_payload;
 
-    http_req = elasticsearch_connection_post_request(conn);
+    i_debug("POSTING: %s", cmd);
+
+    http_req = elasticsearch_connection_http_request(conn, url);
 
     post_payload = i_stream_create_from_data(cmd, strlen(cmd));
 
@@ -272,6 +263,7 @@ void json_parse(json_object * jobj, struct elasticsearch_connection *conn)
 static int elasticsearch_json_parse(struct elasticsearch_connection *conn,
               const void *data)
 {
+    i_debug("result: %s", (const char*)data);
     json_object * jobj = json_tokener_parse(data); 
     json_parse(jobj, conn);
 
@@ -302,9 +294,31 @@ static void elasticsearch_connection_payload_input(struct elasticsearch_connecti
     }
 }
 
+uint32_t elasticsearch_connection_last_uid(struct elasticsearch_connection *conn,
+    const char *box_guid)
+{
+    
+}
+
+static void
+elasticsearch_connection_http_response(const struct http_response *response,
+    struct elasticsearch_connection *conn)
+{
+    switch (conn->post_type) {
+    case ELASTICSEARCH_POST_TYPE_SELECT:
+        elasticsearch_connection_select_response(response, conn);
+        break;
+    case ELASTICSEARCH_POST_TYPE_UPDATE:
+        elasticsearch_connection_update_response(response, conn);
+        break;
+    case ELASTICSEARCH_POST_TYPE_LAST_UID:
+        break;
+    }
+}
+
 static void
 elasticsearch_connection_select_response(const struct http_response *response,
-                struct elasticsearch_connection *conn)
+    struct elasticsearch_connection *conn)
 {
     if (response->status / 100 != 2) {
         i_error("fts_elasticsearch: lookup failed: %s", response->reason);
@@ -326,11 +340,25 @@ elasticsearch_connection_select_response(const struct http_response *response,
     elasticsearch_connection_payload_input(conn);
 }
 
+struct http_client_request*
+elasticsearch_connection_http_request(struct elasticsearch_connection *conn,
+    const char *url)
+{
+    struct http_client_request *http_req;    
+
+    http_req = http_client_request(elasticsearch_http_client, "POST",
+                       conn->http_host, url,
+                       elasticsearch_connection_http_response, conn);
+    http_client_request_set_port(http_req, conn->http_port);
+    http_client_request_set_ssl(http_req, conn->http_ssl);
+    http_client_request_add_header(http_req, "Content-Type", "text/json");
+
+    return http_req;
+}
+
 int elasticsearch_connection_select(struct elasticsearch_connection *conn, pool_t pool,
     const char *query, const char *box_guid, struct elasticsearch_result ***box_results_r)
 {
-    struct http_client_request *http_req;
-    struct istream *post_payload;
     struct elasticsearch_lookup_context lookup_context;
     const char *url;
 
@@ -341,31 +369,18 @@ int elasticsearch_connection_select(struct elasticsearch_connection *conn, pool_
     conn->ctx->uid = -1;
     conn->ctx->score = -1;
     conn->ctx->results_found = FALSE;
+    conn->post_type = ELASTICSEARCH_POST_TYPE_SELECT;
 
+    /* initialise our results stores */
     p_array_init(&conn->ctx->results, pool, 32);
-    
     hash_table_create(&lookup_context.mailboxes, default_pool, 0, str_hash, strcmp);
 
-    /* build the url */
     /* TODO: this should really be configurable */
     url = t_strconcat(conn->http_base_url, box_guid, NULL);
     url = t_strconcat(url, "/mail/_search/", NULL);
 
-    http_req = http_client_request(elasticsearch_http_client, "POST",
-                       conn->http_host, url,
-                       elasticsearch_connection_select_response, conn);
-    http_client_request_set_port(http_req, conn->http_port);
-    http_client_request_set_ssl(http_req, conn->http_ssl);
-    http_client_request_add_header(http_req, "Content-Type", "text/json");
-
-    post_payload = i_stream_create_from_data(query, strlen(query));
-    http_client_request_set_payload(http_req, post_payload, TRUE);
-    i_stream_unref(&post_payload);
-    http_client_request_submit(http_req);
-
-    conn->request_status = 0;
-
-    http_client_wait(elasticsearch_http_client);
+    /* perform the actual POST */
+    elasticsearch_connection_post(conn, url, query);
 
     if (conn->request_status < 0) 
         return -1;
@@ -374,8 +389,5 @@ int elasticsearch_connection_select(struct elasticsearch_connection *conn, pool_
     array_append_zero(&conn->ctx->results);
     *box_results_r = array_idx_modifiable(&conn->ctx->results, 0);
 
-    if (conn->ctx->results_found)
-        return 1;
-    else
-        return 0;
+    return conn->ctx->results_found;
 }
