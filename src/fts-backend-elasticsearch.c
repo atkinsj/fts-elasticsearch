@@ -120,30 +120,42 @@ fts_backend_elasticsearch_get_last_uid(struct fts_backend *_backend,
                                  struct mailbox *box, uint32_t *last_uid_r)
 {
     struct elasticsearch_fts_backend *backend = (struct elasticsearch_fts_backend *)_backend;
-    struct fts_index_header hdr;
+    const char* box_guid;
+    int ret;
+
+    if (box != NULL) {
+        if (fts_mailbox_get_guid(box, &box_guid) < 0) {
+            i_debug("fts-elasticsearch: get_last_uid: fts_mailbox_get_guid failed");
+
+            return -1;
+        }
+    }
 
     /* build a JSON object to query the last uid */
-    /*
-    {
-      "fields": [
-        "_id"
-      ],
-      "query": {
-        "match_all": {
-          
-        }
-      },
-      "sort": {
-        "_id": "desc"
-      },
-      "size": 1
+    json_object *root = json_object_new_object();
+    json_object *sort_root = json_object_new_object();
+    json_object *query_root = json_object_new_object();
+
+    json_object_object_add(sort_root, "uid", json_object_new_string("desc"));
+    json_object_object_add(query_root, "match_all", json_object_new_object());
+
+    json_object_object_add(root, "query", query_root);
+    json_object_object_add(root, "sort", sort_root);
+    json_object_object_add(root, "size", json_object_new_int(1));
+
+    /* call ES */
+    ret = elasticsearch_connection_last_uid(backend->elasticsearch_conn,
+        json_object_to_json_string(root), box_guid);
+
+    if (ret > 0) {
+        *last_uid_r = ret;
+        fts_index_set_last_uid(box, *last_uid_r);
+
+        return 0;
     }
-    */
-
-
     
     *last_uid_r = 0;
-    (void)fts_index_set_last_uid(box, *last_uid_r);
+    fts_index_set_last_uid(box, *last_uid_r);
 
     return 0;
 }

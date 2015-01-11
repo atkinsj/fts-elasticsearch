@@ -57,8 +57,6 @@ int elasticsearch_connection_init(const char *url, bool debug,
     struct http_url *http_url;
     const char *error;
 
-    debug = TRUE; /* TODO: remove! */
-
     if (http_url_parse(url, NULL, 0, pool_datastack_create(),
                &http_url, &error) < 0) {
         *error_r = t_strdup_printf(
@@ -128,18 +126,15 @@ int elasticsearch_connection_post(struct elasticsearch_connection *conn,
 
     i_debug("POSTING: %s", cmd);
 
+    /* binds a callback object to elasticsearch_connection_http_response */
     http_req = elasticsearch_connection_http_request(conn, url);
 
     post_payload = i_stream_create_from_data(cmd, strlen(cmd));
-
     http_client_request_set_payload(http_req, post_payload, TRUE);
-
     i_stream_unref(&post_payload);
-
     http_client_request_submit(http_req);
 
     conn->request_status = 0;
-
     http_client_wait(elasticsearch_http_client);
 
     return conn->request_status;
@@ -200,6 +195,42 @@ elasticsearch_result_get(struct elasticsearch_connection *conn, const char *box_
     return result;
 }
 
+void elasticsearch_connection_last_uid_json(struct elasticsearch_connection *conn,
+    char *key, struct json_object *val)
+{
+    if (strcmp(key, "uid") == 0)
+        conn->ctx->uid = json_object_get_int(val);
+}
+
+void elasticsearch_connection_select_json(struct elasticsearch_connection *conn,
+    char *key, struct json_object *val)
+{
+    if (strcmp(key, "uid") == 0)
+        conn->ctx->uid = json_object_get_int(val);
+
+    if (strcmp(key, "_score") == 0)
+        conn->ctx->score = json_object_get_double(val);  
+
+    if (strcmp(key, "box") == 0)
+        conn->ctx->box_guid = i_strdup(json_object_get_string(val));
+
+    /* this is all we need for an e-mail result */
+    if (conn->ctx->uid != -1 && conn->ctx->score != -1 && conn->ctx->box_guid != NULL) {
+        struct elasticsearch_result * result = elasticsearch_result_get(conn, conn->ctx->box_guid);
+        struct fts_score_map *tmp_score = array_append_space(&result->scores);
+
+        seq_range_array_add(&result->uids, conn->ctx->uid);
+        tmp_score->uid = conn->ctx->uid;
+        tmp_score->score = conn->ctx->score;
+
+        /* clean-up */
+        conn->ctx->uid = -1;
+        conn->ctx->score = -1;
+        conn->ctx->box_guid = NULL;
+        conn->ctx->results_found = TRUE;
+    }
+}
+
 void json_parse(json_object * jobj, struct elasticsearch_connection *conn)
 {
     enum json_type type;
@@ -208,31 +239,20 @@ void json_parse(json_object * jobj, struct elasticsearch_connection *conn)
         json_object * temp;
         type = json_object_get_type(val);
 
-        if (strcmp(key, "uid") == 0)
-            conn->ctx->uid = json_object_get_int(val);
+        /* the output of the json_parse varies per post type */
+        switch (conn->post_type) {
+        case ELASTICSEARCH_POST_TYPE_LAST_UID:
+            elasticsearch_connection_last_uid_json(conn, key, val);
+            break;
+        case ELASTICSEARCH_POST_TYPE_SELECT:
+            elasticsearch_connection_select_json(conn, key, val);
+            break;
+        case ELASTICSEARCH_POST_TYPE_UPDATE:
+            /* not implemented */
+            break;
+        }        
 
-        if (strcmp(key, "_score") == 0)
-            conn->ctx->score = json_object_get_double(val);  
-
-        if (strcmp(key, "box") == 0)
-            conn->ctx->box_guid = i_strdup(json_object_get_string(val));
-
-        /* this is all we need for an e-mail result */
-        if (conn->ctx->uid != -1 && conn->ctx->score != -1 && conn->ctx->box_guid != NULL) {
-            struct elasticsearch_result * result = elasticsearch_result_get(conn, conn->ctx->box_guid);
-            struct fts_score_map *tmp_score = array_append_space(&result->scores);
-
-            seq_range_array_add(&result->uids, conn->ctx->uid);
-            tmp_score->uid = conn->ctx->uid;
-            tmp_score->score = conn->ctx->score;
-
-            /* clean-up */
-            conn->ctx->uid = -1;
-            conn->ctx->score = -1;
-            conn->ctx->box_guid = NULL;
-            conn->ctx->results_found = TRUE;
-        }
-
+        /* recursively process the json */
         switch (type) {
         case json_type_boolean: /* fall through */
         case json_type_double:  /* fall through */
@@ -254,7 +274,6 @@ void json_parse(json_object * jobj, struct elasticsearch_connection *conn)
 
             break;
         case json_type_null:
-            i_error("fts-elasticsearch: Invalid JSON returned from ElasticSearch");
             break;
         }
     }
@@ -277,7 +296,7 @@ static void elasticsearch_connection_payload_input(struct elasticsearch_connecti
     int ret;
 
     while ((ret = i_stream_read_data(conn->payload, &data, &size, 0)) > 0) {
-        (void)elasticsearch_json_parse(conn, data);
+        elasticsearch_json_parse(conn, data);        
 
         i_stream_skip(conn->payload, size);
     }
@@ -295,9 +314,26 @@ static void elasticsearch_connection_payload_input(struct elasticsearch_connecti
 }
 
 uint32_t elasticsearch_connection_last_uid(struct elasticsearch_connection *conn,
-    const char *box_guid)
+    const char *query, const char *box_guid)
 {
-    
+    struct elasticsearch_lookup_context lookup_context;
+    const char *url;
+
+    /* set-up the context */
+    memset(&lookup_context, 0, sizeof(lookup_context));
+    conn->ctx = &lookup_context;
+    conn->ctx->uid = -1;
+    conn->post_type = ELASTICSEARCH_POST_TYPE_LAST_UID;
+
+    /* build the url */
+    url = t_strconcat(conn->http_base_url, box_guid, NULL);
+    url = t_strconcat(url, "/mail/_search/", NULL);
+
+    /* perform the actual POST */
+    elasticsearch_connection_post(conn, url, query);
+
+    /* set during the json parsing; will be the intiailised -1 or a valid uid */
+    return conn->ctx->uid;
 }
 
 static void
@@ -305,13 +341,12 @@ elasticsearch_connection_http_response(const struct http_response *response,
     struct elasticsearch_connection *conn)
 {
     switch (conn->post_type) {
+    case ELASTICSEARCH_POST_TYPE_LAST_UID: /* fall through */
     case ELASTICSEARCH_POST_TYPE_SELECT:
         elasticsearch_connection_select_response(response, conn);
         break;
     case ELASTICSEARCH_POST_TYPE_UPDATE:
         elasticsearch_connection_update_response(response, conn);
-        break;
-    case ELASTICSEARCH_POST_TYPE_LAST_UID:
         break;
     }
 }
@@ -321,6 +356,8 @@ elasticsearch_connection_select_response(const struct http_response *response,
     struct elasticsearch_connection *conn)
 {
     if (response->status / 100 != 2) {
+        /* TODO: this isn't really an error sometimes; we punt data at mailboxes
+         * that may not exist if the index has been rebuilt, causing a 404 from ES. */
         i_error("fts_elasticsearch: lookup failed: %s", response->reason);
         conn->request_status = -1;
         return;
@@ -375,7 +412,7 @@ int elasticsearch_connection_select(struct elasticsearch_connection *conn, pool_
     p_array_init(&conn->ctx->results, pool, 32);
     hash_table_create(&lookup_context.mailboxes, default_pool, 0, str_hash, strcmp);
 
-    /* TODO: this should really be configurable */
+    /* build the url */
     url = t_strconcat(conn->http_base_url, box_guid, NULL);
     url = t_strconcat(url, "/mail/_search/", NULL);
 
