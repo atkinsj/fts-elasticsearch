@@ -140,13 +140,6 @@ fts_backend_elasticsearch_get_last_uid(struct fts_backend *_backend,
     }
     */
 
-    json_object *temp = json_object_new_object();
-
-    json_object_object_add(temp, "id", json_object_new_string(ctx->box_guid));
-    json_object_object_add(temp, "_type", json_object_new_string("mail"));
-    json_object_object_add(temp, "_id", json_object_new_int(uid));
-
-
 
     
     *last_uid_r = 0;
