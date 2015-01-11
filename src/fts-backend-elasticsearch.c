@@ -41,9 +41,6 @@ struct elasticsearch_fts_backend_update_context {
     /* builds the current message as a JSON object so we can append it later. */
     json_object *message;
 
-    uint32_t last_indexed_uid;
-
-    unsigned int last_indexed_uid_set:1;
     unsigned int body_open:1;
     unsigned int documents_added:1;
     unsigned int expunges:1;
@@ -62,9 +59,8 @@ static struct fts_backend *fts_backend_elasticsearch_alloc(void)
 
 static int
 fts_backend_elasticsearch_init(struct fts_backend *_backend,
-                         const char **error_r ATTR_UNUSED)
+                               const char **error_r ATTR_UNUSED)
 {
-    i_debug("fts-elasticsearch: init called");
     struct elasticsearch_fts_backend *backend = (struct elasticsearch_fts_backend *)_backend;
     
     struct fts_elasticsearch_user *fuser =
@@ -77,13 +73,12 @@ fts_backend_elasticsearch_init(struct fts_backend *_backend,
     }
 
     return elasticsearch_connection_init(fuser->set.url, fuser->set.debug,
-                    &backend->elasticsearch_conn, error_r);
+                                         &backend->elasticsearch_conn, error_r);
 }
 
 static void
 fts_backend_elasticsearch_deinit(struct fts_backend *_backend)
 {
-    i_debug("fts-elasticsearch: deinit called");
     struct elasticsearch_fts_backend *backend = (struct elasticsearch_fts_backend *)_backend;
 
     i_free(backend);
@@ -98,6 +93,9 @@ fts_backend_elasticsearch_doc_close(struct elasticsearch_fts_backend_update_cont
     /* convert our completed message to a string and tack it on to our request */
     str_append(ctx->json_request, json_object_to_json_string(ctx->message));
     str_append(ctx->json_request, "\n");
+
+    /* clean up our json object, it is no longer required */
+    json_object_put(ctx->message);
 
     /* clean-up for the next message */
     str_truncate(ctx->temp, 0);
@@ -115,15 +113,17 @@ fts_backend_elasticsearch_doc_close(struct elasticsearch_fts_backend_update_cont
  */
 static int
 fts_backend_elasticsearch_get_last_uid(struct fts_backend *_backend,
-                                 struct mailbox *box, uint32_t *last_uid_r)
+                                       struct mailbox *box,
+                                       uint32_t *last_uid_r)
 {
-    struct elasticsearch_fts_backend *backend = (struct elasticsearch_fts_backend *)_backend;
+    struct elasticsearch_fts_backend *backend =
+        (struct elasticsearch_fts_backend *)_backend;
     const char* box_guid;
     int ret;
 
     if (box != NULL) {
         if (fts_mailbox_get_guid(box, &box_guid) < 0) {
-            i_debug("fts-elasticsearch: get_last_uid: fts_mailbox_get_guid failed");
+            i_debug("fts-elasticsearch: get_last_uid: failed to get mbox guid");
 
             return -1;
         }
@@ -144,11 +144,12 @@ fts_backend_elasticsearch_get_last_uid(struct fts_backend *_backend,
     json_object_object_add(root, "fields", fields_root);
     json_object_object_add(root, "size", json_object_new_int(1));
 
-    i_debug("request: %s", json_object_to_json_string(root));
-
     /* call ES */
     ret = elasticsearch_connection_last_uid(backend->elasticsearch_conn,
         json_object_to_json_string(root), box_guid);
+
+    /* clean it up */
+    json_object_put(root);
 
     if (ret > 0) {
         *last_uid_r = ret;
@@ -173,6 +174,9 @@ fts_backend_elasticsearch_update_init(struct fts_backend *_backend)
 
     ctx = i_new(struct elasticsearch_fts_backend_update_context, 1);
     ctx->ctx.backend = _backend;
+    ctx->current_field = NULL;
+    ctx->temp = NULL;
+    ctx->json_request = NULL;
 
     return &ctx->ctx;
 }
@@ -194,6 +198,9 @@ fts_backend_elasticsearch_update_deinit(struct fts_backend_update_context *_ctx)
 
     /* cleanup */
     memset(ctx->box_guid, 0, sizeof(ctx->box_guid));
+    str_free(&ctx->current_field);
+    str_free(&ctx->temp);
+    str_free(&ctx->json_request);
     i_free(ctx);
     
     return 0;
@@ -204,7 +211,7 @@ fts_backend_elasticsearch_update_deinit(struct fts_backend_update_context *_ctx)
  */
 static void
 fts_backend_elasticsearch_update_set_mailbox(struct fts_backend_update_context *_ctx,
-                                       struct mailbox *box)
+                                             struct mailbox *box)
 {
     i_debug("fts-elasticsearch: update_set_mailbox called");
     struct elasticsearch_fts_backend_update_context *ctx =
@@ -242,7 +249,7 @@ fts_backend_elasticsearch_update_set_mailbox(struct fts_backend_update_context *
   */
 static void
 fts_backend_elasticsearch_doc_open(struct elasticsearch_fts_backend_update_context *_ctx,
-              uint32_t uid)
+                                   uint32_t uid)
 {
     struct elasticsearch_fts_backend_update_context *ctx =
         (struct elasticsearch_fts_backend_update_context *)_ctx;
@@ -273,6 +280,9 @@ fts_backend_elasticsearch_doc_open(struct elasticsearch_fts_backend_update_conte
 
     jstring = json_object_new_string(ctx->ctx.backend->ns->owner->username);
     json_object_object_add(ctx->message, "user", jstring);
+
+    /* clean-up */
+    json_object_put(action);
 }
 
 /**
@@ -280,14 +290,16 @@ fts_backend_elasticsearch_doc_open(struct elasticsearch_fts_backend_update_conte
   */
 static void
 fts_backend_elasticsearch_uid_changed(struct elasticsearch_fts_backend_update_context *ctx,
-                 uint32_t uid)
+                                      uint32_t uid)
 {
     if (!ctx->documents_added) {
         i_assert(ctx->prev_uid == 0);
 
         ctx->current_field = str_new(default_pool, 1024 * 64);
         ctx->temp = str_new(default_pool, 1024 * 64);
-        ctx->json_request = str_new(default_pool, 1024 * 64); /* TODO: this isn't big enough for large e-mails. */
+
+        /* TODO: this isn't big enough for large e-mails. */
+        ctx->json_request = str_new(default_pool, 1024 * 64);
     } else {
         /* this is the end of an old message. nb: the last message to be indexed
          * will not reach here but will instead be caught in update_deinit. */
@@ -372,7 +384,8 @@ fts_backend_elasticsearch_update_unset_build_key(struct fts_backend_update_conte
 }
 
 static void
-fts_backend_elasticsearch_update_expunge(struct fts_backend_update_context *ctx, uint32_t uid)
+fts_backend_elasticsearch_update_expunge(struct fts_backend_update_context *ctx,
+                                         uint32_t uid)
 {
     i_debug("fts-elasticsearch: update_expunge called");
     /* TODO: called when a message moves from one mailbox to another (atleast) */
@@ -400,7 +413,7 @@ static int fts_backend_elasticsearch_optimize(struct fts_backend *backend ATTR_U
 
 static bool
 elasticsearch_add_definite_query(struct mail_search_arg *arg, json_object *value,
-                    json_object *fields)
+                                 json_object *fields)
 {
     switch (arg->type) {
     case SEARCH_TEXT:
@@ -419,7 +432,8 @@ elasticsearch_add_definite_query(struct mail_search_arg *arg, json_object *value
         if (!fts_header_want_indexed(arg->hdr_field_name))
             return FALSE;
 
-        json_object_array_add(fields, json_object_new_string(t_str_lcase(arg->hdr_field_name)));
+        json_object_array_add(fields,
+            json_object_new_string(t_str_lcase(arg->hdr_field_name)));
 
         break;
     default:
@@ -428,7 +442,7 @@ elasticsearch_add_definite_query(struct mail_search_arg *arg, json_object *value
 
     /* TODO: can we wrap a query_string in a not filter? */
     if (arg->match_not)
-        i_debug("fts-elasticsearch: arg->match_not is true in SEARCH_HEADER_COMPRESS_LWSP");
+        i_debug("fts-elasticsearch: arg->match_not is true");
 
     /* we always want to add a query value */
     json_object_object_add(value, "query", json_object_new_string(arg->value.str));
@@ -438,7 +452,7 @@ elasticsearch_add_definite_query(struct mail_search_arg *arg, json_object *value
 
 static bool
 elasticsearch_add_definite_query_args(json_object *term, struct mail_search_arg *arg,
-                        bool and_args)
+                                      bool and_args)
 {
     bool field_added = FALSE;
 
@@ -471,11 +485,10 @@ elasticsearch_add_definite_query_args(json_object *term, struct mail_search_arg 
 
 static int
 fts_backend_elasticsearch_lookup(struct fts_backend *_backend, struct mailbox *box,
-            struct mail_search_arg *args,
-            enum fts_lookup_flags flags,
-            struct fts_result *result)
+                                 struct mail_search_arg *args,
+                                 enum fts_lookup_flags flags,
+                                 struct fts_result *result)
 {
-    i_debug("lookup called");
     struct elasticsearch_fts_backend *backend =
         (struct elasticsearch_fts_backend *)_backend;
 
@@ -483,7 +496,7 @@ fts_backend_elasticsearch_lookup(struct fts_backend *_backend, struct mailbox *b
     bool and_args = (flags & FTS_LOOKUP_FLAG_AND_ARGS) != 0;
     struct mailbox_status status;
     const char *box_guid;
-    int ret;
+    int ret = -1;
 
     pool_t pool = pool_alloconly_create("fts elasticsearch search", 1024);
 
@@ -496,7 +509,8 @@ fts_backend_elasticsearch_lookup(struct fts_backend *_backend, struct mailbox *b
 
     /* start building our query object */
     json_object *term = json_object_new_object();
-    bool valid_search = elasticsearch_add_definite_query_args(term, args, and_args);
+    bool valid_search =
+        elasticsearch_add_definite_query_args(term, args, and_args);
 
     if (!valid_search) {
         /* TODO: what should we return here? */
@@ -530,17 +544,20 @@ fts_backend_elasticsearch_lookup(struct fts_backend *_backend, struct mailbox *b
     if (ret > 0) {
         array_append_array(uids_arr, &es_results[0]->uids);
         array_append_array(&result->scores, &es_results[0]->scores);
-    } else
-        return -1;
+    }
 
-    return 0;
+    /* clean-up */
+    json_object_put(query);
+    pool_unref(&pool);
+
+    return ret;
 }
 
 int fts_backend_elasticsearch_lookup_multi(struct fts_backend *backend,
-    struct mailbox *const boxes[],
-    struct mail_search_arg *args,
-    enum fts_lookup_flags flags,
-    struct fts_multi_result *result)
+                                           struct mailbox *const boxes[],
+                                           struct mail_search_arg *args,
+                                           enum fts_lookup_flags flags,
+                                           struct fts_multi_result *result)
 {
     i_debug("fts-elasticsearch: lookup multi called");
     /* TODO: has this been deprecated? testing with Roundcube, it calls _lookup multiple times

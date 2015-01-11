@@ -52,7 +52,8 @@ struct elasticsearch_connection {
 };
 
 int elasticsearch_connection_init(const char *url, bool debug,
-    struct elasticsearch_connection **conn_r, const char **error_r)
+                                  struct elasticsearch_connection **conn_r,
+                                  const char **error_r)
 {
     struct http_client_settings http_set;
     struct elasticsearch_connection *conn;
@@ -99,7 +100,7 @@ void elasticsearch_connection_deinit(struct elasticsearch_connection *conn)
 
 static void
 elasticsearch_connection_update_response(const struct http_response *response,
-                struct elasticsearch_connection *conn)
+                                         struct elasticsearch_connection *conn)
 {
     if (response->status / 100 != 2) {
         i_error("fts_elasticsearch: Indexing failed: %s", response->reason);
@@ -108,7 +109,7 @@ elasticsearch_connection_update_response(const struct http_response *response,
 }
 
 int elasticsearch_connection_update(struct elasticsearch_connection *conn,
-    const char *cmd)
+                                    const char *cmd)
 {
     /* set-up the connection */
     conn->post_type = ELASTICSEARCH_POST_TYPE_UPDATE;
@@ -121,7 +122,7 @@ int elasticsearch_connection_update(struct elasticsearch_connection *conn,
 }
 
 int elasticsearch_connection_post(struct elasticsearch_connection *conn,
-    const char *url, const char *cmd)
+                                  const char *url, const char *cmd)
 {
     struct http_client_request *http_req;
     struct istream *post_payload;
@@ -199,7 +200,7 @@ elasticsearch_result_get(struct elasticsearch_connection *conn, const char *box_
 }
 
 void elasticsearch_connection_last_uid_json(struct elasticsearch_connection *conn,
-    char *key, struct json_object *val)
+                                            char *key, struct json_object *val)
 {
     if (strcmp(key, "uid") == 0) {
         /* field is returned as an array */
@@ -209,7 +210,7 @@ void elasticsearch_connection_last_uid_json(struct elasticsearch_connection *con
 }
 
 void elasticsearch_connection_select_json(struct elasticsearch_connection *conn,
-    char *key, struct json_object *val)
+                                          char *key, struct json_object *val)
 {
     if (strcmp(key, "uid") == 0) {
         json_object * jvalue = json_object_array_get_idx(val, 0);
@@ -290,9 +291,8 @@ void json_parse(json_object * jobj, struct elasticsearch_connection *conn)
 } 
 
 static int elasticsearch_json_parse(struct elasticsearch_connection *conn,
-    string_t *data)
+                                    string_t *data)
 {
-    i_debug("result: %s", str_c(data));
     json_object * jobj = json_tokener_parse(str_c(data));
 
     if (jobj == NULL) {
@@ -331,13 +331,14 @@ static void elasticsearch_connection_payload_input(struct elasticsearch_connecti
         elasticsearch_json_parse(conn, conn->ctx->email);
 
         /* clean-up */
+        str_free(&conn->ctx->email);
         io_remove(&conn->io);
         i_stream_unref(&conn->payload);
     }
 }
 
 uint32_t elasticsearch_connection_last_uid(struct elasticsearch_connection *conn,
-    const char *query, const char *box_guid)
+                                           const char *query, const char *box_guid)
 {
     struct elasticsearch_lookup_context lookup_context;
     const char *url;
@@ -360,23 +361,8 @@ uint32_t elasticsearch_connection_last_uid(struct elasticsearch_connection *conn
 }
 
 static void
-elasticsearch_connection_http_response(const struct http_response *response,
-    struct elasticsearch_connection *conn)
-{
-    switch (conn->post_type) {
-    case ELASTICSEARCH_POST_TYPE_LAST_UID: /* fall through */
-    case ELASTICSEARCH_POST_TYPE_SELECT:
-        elasticsearch_connection_select_response(response, conn);
-        break;
-    case ELASTICSEARCH_POST_TYPE_UPDATE:
-        elasticsearch_connection_update_response(response, conn);
-        break;
-    }
-}
-
-static void
 elasticsearch_connection_select_response(const struct http_response *response,
-    struct elasticsearch_connection *conn)
+                                         struct elasticsearch_connection *conn)
 {
     if (response->status / 100 != 2) {
         /* TODO: this isn't really an error sometimes; we punt data at mailboxes
@@ -401,9 +387,24 @@ elasticsearch_connection_select_response(const struct http_response *response,
     elasticsearch_connection_payload_input(conn);
 }
 
+static void
+elasticsearch_connection_http_response(const struct http_response *response,
+                                       struct elasticsearch_connection *conn)
+{
+    switch (conn->post_type) {
+    case ELASTICSEARCH_POST_TYPE_LAST_UID: /* fall through */
+    case ELASTICSEARCH_POST_TYPE_SELECT:
+        elasticsearch_connection_select_response(response, conn);
+        break;
+    case ELASTICSEARCH_POST_TYPE_UPDATE:
+        elasticsearch_connection_update_response(response, conn);
+        break;
+    }
+}
+
 struct http_client_request*
 elasticsearch_connection_http_request(struct elasticsearch_connection *conn,
-    const char *url)
+                                      const char *url)
 {
     struct http_client_request *http_req;    
 
@@ -418,7 +419,8 @@ elasticsearch_connection_http_request(struct elasticsearch_connection *conn,
 }
 
 int elasticsearch_connection_select(struct elasticsearch_connection *conn, pool_t pool,
-    const char *query, const char *box_guid, struct elasticsearch_result ***box_results_r)
+                                    const char *query, const char *box_guid,
+                                    struct elasticsearch_result ***box_results_r)
 {
     struct elasticsearch_lookup_context lookup_context;
     const char *url;
