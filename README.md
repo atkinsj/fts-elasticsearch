@@ -1,7 +1,7 @@
 # fts-elasticsearch
 fts-elasticsearch is a Dovecot full-text search indexing plugin that uses ElasticSearch as a backend.
 
-Dovecot communicates to ES using HTTP/JSON queries. It currently supports automatic indexing of mail only with search expected soon.
+Dovecot communicates to ES using HTTP/JSON queries. It currently supports automatic indexing and searching of e-mail.
 
 ### Experimental
 This plugin is currently highly experimental and under active development. Expect changes, bugs, breaks.
