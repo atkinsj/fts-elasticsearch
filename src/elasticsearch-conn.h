@@ -60,7 +60,7 @@ int elasticsearch_connection_update(struct elasticsearch_connection *conn,
     const char *cmd);
 
 static int elasticsearch_json_parse(struct elasticsearch_connection *conn,
-    const void *data);
+    string_t *data);
 
 void json_parse_array(json_object *jobj, char *key,
     struct elasticsearch_connection *conn);

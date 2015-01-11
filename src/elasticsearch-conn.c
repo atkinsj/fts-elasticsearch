@@ -25,6 +25,8 @@ struct elasticsearch_lookup_context {
     float score;
     const char *box_guid;
     bool results_found;
+
+    string_t *email;
 };
 
 struct elasticsearch_connection {
@@ -79,7 +81,7 @@ int elasticsearch_connection_init(const char *url, bool debug,
         http_set.max_pipelined_requests = 1;
         http_set.max_redirects = 1;
         http_set.max_attempts = 3;
-        http_set.debug = debug;
+        http_set.debug = FALSE; /*todo: debug*/
         elasticsearch_http_client = http_client_init(&http_set);
     }
 
@@ -124,7 +126,8 @@ int elasticsearch_connection_post(struct elasticsearch_connection *conn,
     struct http_client_request *http_req;
     struct istream *post_payload;
 
-    i_debug("POSTING: %s", cmd);
+    /*i_debug("POSTING: %s", cmd);*/
+    i_debug("URL: %s", url);
 
     /* binds a callback object to elasticsearch_connection_http_response */
     http_req = elasticsearch_connection_http_request(conn, url);
@@ -166,7 +169,7 @@ void json_parse_array(json_object *jobj, char *key, struct elasticsearch_connect
             json_parse_array(jvalue, NULL, conn);
         }
         else if (type != json_type_object) {
-            /* TODO :what do we do here? */
+            /* TODO: what do we do here? */
         }
         else {
             json_parse(jvalue, conn);
@@ -198,8 +201,11 @@ elasticsearch_result_get(struct elasticsearch_connection *conn, const char *box_
 void elasticsearch_connection_last_uid_json(struct elasticsearch_connection *conn,
     char *key, struct json_object *val)
 {
-    if (strcmp(key, "uid") == 0)
-        conn->ctx->uid = json_object_get_int(val);
+    if (strcmp(key, "uid") == 0) {
+        /* field is returned as an array */
+        json_object * jvalue = json_object_array_get_idx(val, 0);
+        conn->ctx->uid = json_object_get_int(jvalue);
+    }
 }
 
 void elasticsearch_connection_select_json(struct elasticsearch_connection *conn,
@@ -250,7 +256,7 @@ void json_parse(json_object * jobj, struct elasticsearch_connection *conn)
         case ELASTICSEARCH_POST_TYPE_UPDATE:
             /* not implemented */
             break;
-        }        
+        }
 
         /* recursively process the json */
         switch (type) {
@@ -280,10 +286,16 @@ void json_parse(json_object * jobj, struct elasticsearch_connection *conn)
 } 
 
 static int elasticsearch_json_parse(struct elasticsearch_connection *conn,
-              const void *data)
+    string_t *data)
 {
-    i_debug("result: %s", (const char*)data);
-    json_object * jobj = json_tokener_parse(data); 
+    /*i_debug("result: %s", str_c((const char*)data));*/
+    json_object * jobj = json_tokener_parse(str_c(data));
+
+    if (jobj == NULL) {
+        i_debug("fts-elasticsearch: parsing of JSON reply failed, likely >1Mb result");
+        return -1;
+    }
+
     json_parse(jobj, conn);
 
     return 0;
@@ -296,7 +308,9 @@ static void elasticsearch_connection_payload_input(struct elasticsearch_connecti
     int ret;
 
     while ((ret = i_stream_read_data(conn->payload, &data, &size, 0)) > 0) {
-        elasticsearch_json_parse(conn, data);        
+        /* TODO: there has to be a better way to do this. How do we process JSON in chunks? 
+         * Though as we only return the UID, this would be a lot of UID's. */
+        str_append(conn->ctx->email, (const char *)data);
 
         i_stream_skip(conn->payload, size);
     }
@@ -308,6 +322,11 @@ static void elasticsearch_connection_payload_input(struct elasticsearch_connecti
             i_error("fts_elasticsearch: failed to read payload from HTTP server: %m");
             conn->request_status = -1;
         }
+
+        /* parse the output */
+        elasticsearch_json_parse(conn, conn->ctx->email);
+
+        /* clean-up */
         io_remove(&conn->io);
         i_stream_unref(&conn->payload);
     }
@@ -373,6 +392,7 @@ elasticsearch_connection_select_response(const struct http_response *response,
      * as they are cuasing I/O leaks. */
     i_stream_ref(response->payload);
     conn->payload = response->payload;
+    conn->ctx->email = str_new(default_pool, 1000000);
     conn->io = io_add_istream(response->payload, elasticsearch_connection_payload_input, conn);
     elasticsearch_connection_payload_input(conn);
 }

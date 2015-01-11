@@ -40,8 +40,6 @@ struct elasticsearch_fts_backend_update_context {
 
     /* builds the current message as a JSON object so we can append it later. */
     json_object *message;
-    
-    int post;
 
     uint32_t last_indexed_uid;
 
@@ -135,12 +133,15 @@ fts_backend_elasticsearch_get_last_uid(struct fts_backend *_backend,
     json_object *root = json_object_new_object();
     json_object *sort_root = json_object_new_object();
     json_object *query_root = json_object_new_object();
+    json_object *fields_root = json_object_new_array();
 
     json_object_object_add(sort_root, "uid", json_object_new_string("desc"));
     json_object_object_add(query_root, "match_all", json_object_new_object());
+    json_object_array_add(fields_root, json_object_new_string("uid"));
 
-    json_object_object_add(root, "query", query_root);
     json_object_object_add(root, "sort", sort_root);
+    json_object_object_add(root, "query", query_root);
+    json_object_object_add(root, "fields", fields_root);
     json_object_object_add(root, "size", json_object_new_int(1));
 
     /* call ES */
@@ -170,7 +171,6 @@ fts_backend_elasticsearch_update_init(struct fts_backend *_backend)
 
     ctx = i_new(struct elasticsearch_fts_backend_update_context, 1);
     ctx->ctx.backend = _backend;
-    ctx->post = 0;
 
     return &ctx->ctx;
 }
@@ -190,6 +190,8 @@ fts_backend_elasticsearch_update_deinit(struct fts_backend_update_context *_ctx)
     /* do our bulk post */
     elasticsearch_connection_update(backend->elasticsearch_conn, str_c(ctx->json_request));
 
+    /* cleanup */
+    memset(ctx->box_guid, 0, sizeof(ctx->box_guid));
     i_free(ctx);
     
     return 0;
@@ -226,9 +228,6 @@ fts_backend_elasticsearch_update_set_mailbox(struct fts_backend_update_context *
         memcpy(ctx->box_guid, box_guid, sizeof(ctx->box_guid) - 1);
     } else {
         /* a box of null appears to indicate that indexing is complete. */
-
-        /* TODO: Figure out why fts-elasticsearch does this. don't we just blat over it later? */
-        /*memset(ctx->box_guid, 0, sizeof(ctx->box_guid));*/
     }
 
     ctx->prev_box = box;    
@@ -256,6 +255,7 @@ fts_backend_elasticsearch_doc_open(struct elasticsearch_fts_backend_update_conte
     json_object_object_add(temp, "_index", json_object_new_string(ctx->box_guid));
     json_object_object_add(temp, "_type", json_object_new_string("mail"));
     json_object_object_add(temp, "_id", json_object_new_int(uid));
+    json_object_object_add(temp, "refresh", json_object_new_string("true"));
 
     json_object *action = json_object_new_object();
     json_object_object_add(action, "index", temp);
@@ -280,14 +280,12 @@ static void
 fts_backend_elasticsearch_uid_changed(struct elasticsearch_fts_backend_update_context *ctx,
                  uint32_t uid)
 {
-    /* post is 0, this is the first message TODO: should use documents_added = true? */
-    if (ctx->post == 0) {
+    if (!ctx->documents_added) {
         i_assert(ctx->prev_uid == 0);
 
         ctx->current_field = str_new(default_pool, 1024 * 64);
         ctx->temp = str_new(default_pool, 1024 * 64);
-        ctx->json_request = str_new(default_pool, 1024 * 64);
-        ctx->post = 1;
+        ctx->json_request = str_new(default_pool, 1024 * 64); /* TODO: this isn't big enough for large e-mails. */
     } else {
         /* this is the end of an old message. nb: the last message to be indexed
          * will not reach here but will instead be caught in update_deinit. */
@@ -317,9 +315,7 @@ fts_backend_elasticsearch_update_set_build_key(struct fts_backend_update_context
     switch (key->type) {
     case FTS_BACKEND_BUILD_KEY_HDR: /* fall through */
     case FTS_BACKEND_BUILD_KEY_MIME_HDR:
-        /* TODO: we don't really want to append, there's probably some way to
-         * instantiate a string_t from a const char *. */
-        str_append(ctx->current_field, t_str_lcase(key->hdr_name));
+        str_printfa(ctx->current_field, "%s", t_str_lcase(key->hdr_name));
 
         break;
     case FTS_BACKEND_BUILD_KEY_BODY_PART:
@@ -445,8 +441,6 @@ elasticsearch_add_definite_query_args(json_object *term, struct mail_search_arg 
     bool field_added = FALSE;
 
     for (; arg != NULL; arg = arg->next) {
-        i_debug("arg #");
-        i_debug("arg: %s", arg->hdr_field_name);
         json_object *value = json_object_new_object();
         json_object *fields = json_object_new_array();
 
@@ -459,6 +453,7 @@ elasticsearch_add_definite_query_args(json_object *term, struct mail_search_arg 
 
             json_object_object_add(value, "fields", fields);
             json_object_object_add(term, "query_string", value);
+            
 
             if (and_args) {
                 /* TODO: build the syntax for OR in JSON */
@@ -509,6 +504,11 @@ fts_backend_elasticsearch_lookup(struct fts_backend *_backend, struct mailbox *b
     /* wrap it in the ES 'query' field */
     json_object *query = json_object_new_object();
     json_object_object_add(query, "query", term);
+
+    /* only return the UID field */
+    json_object *fields_root = json_object_new_array();
+    json_object_array_add(fields_root, json_object_new_string("uid"));
+    json_object_object_add(query, "fields", fields_root);
 
     /* TODO: we also need to support maybe_uid's */
 
