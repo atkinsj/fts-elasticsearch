@@ -211,14 +211,18 @@ void elasticsearch_connection_last_uid_json(struct elasticsearch_connection *con
 void elasticsearch_connection_select_json(struct elasticsearch_connection *conn,
     char *key, struct json_object *val)
 {
-    if (strcmp(key, "uid") == 0)
-        conn->ctx->uid = json_object_get_int(val);
+    if (strcmp(key, "uid") == 0) {
+        json_object * jvalue = json_object_array_get_idx(val, 0);
+        conn->ctx->uid = json_object_get_int(jvalue);
+    }
 
     if (strcmp(key, "_score") == 0)
         conn->ctx->score = json_object_get_double(val);  
 
-    if (strcmp(key, "box") == 0)
-        conn->ctx->box_guid = i_strdup(json_object_get_string(val));
+    if (strcmp(key, "box") == 0) {
+        json_object * jvalue = json_object_array_get_idx(val, 0);
+        conn->ctx->box_guid = json_object_get_string(jvalue);
+    }
 
     /* this is all we need for an e-mail result */
     if (conn->ctx->uid != -1 && conn->ctx->score != -1 && conn->ctx->box_guid != NULL) {
@@ -288,7 +292,7 @@ void json_parse(json_object * jobj, struct elasticsearch_connection *conn)
 static int elasticsearch_json_parse(struct elasticsearch_connection *conn,
     string_t *data)
 {
-    /*i_debug("result: %s", str_c((const char*)data));*/
+    i_debug("result: %s", str_c(data));
     json_object * jobj = json_tokener_parse(str_c(data));
 
     if (jobj == NULL) {

@@ -144,6 +144,8 @@ fts_backend_elasticsearch_get_last_uid(struct fts_backend *_backend,
     json_object_object_add(root, "fields", fields_root);
     json_object_object_add(root, "size", json_object_new_int(1));
 
+    i_debug("request: %s", json_object_to_json_string(root));
+
     /* call ES */
     ret = elasticsearch_connection_last_uid(backend->elasticsearch_conn,
         json_object_to_json_string(root), box_guid);
@@ -508,6 +510,7 @@ fts_backend_elasticsearch_lookup(struct fts_backend *_backend, struct mailbox *b
     /* only return the UID field */
     json_object *fields_root = json_object_new_array();
     json_object_array_add(fields_root, json_object_new_string("uid"));
+    json_object_array_add(fields_root, json_object_new_string("box"));
     json_object_object_add(query, "fields", fields_root);
 
     /* TODO: we also need to support maybe_uid's */
