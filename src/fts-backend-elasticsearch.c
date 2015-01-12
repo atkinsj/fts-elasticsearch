@@ -118,15 +118,32 @@ fts_backend_elasticsearch_get_last_uid(struct fts_backend *_backend,
 {
     struct elasticsearch_fts_backend *backend =
         (struct elasticsearch_fts_backend *)_backend;
+    struct fts_index_header hdr;
     const char* box_guid;
     int ret;
 
-    if (box != NULL) {
-        if (fts_mailbox_get_guid(box, &box_guid) < 0) {
-            i_debug("fts-elasticsearch: get_last_uid: failed to get mbox guid");
+    /**
+     * assume the dovecot index will always match ours for uids. this saves
+     * on repeated calls to ES when fts_autoindex=true.
+     *
+     * this has a couple of side effects:
+     *  1. if the ES index has been blown away, this will return a valid
+     *     last_uid that matches Dovecot and it won't realise we need updating
+     *  2. if data has been indexed by Dovecot but missed by ES (outage, etc)
+     *     then it won't ever make it to the ES index either.
+     **/
+    if (fts_index_get_header(box, &hdr)) {
+        *last_uid_r = hdr.last_indexed_uid;
+        return 0;
+    }
 
-            return -1;
-        }
+    i_error("we're updating our index now");
+
+
+    if (fts_mailbox_get_guid(box, &box_guid) < 0) {
+        i_debug("fts-elasticsearch: get_last_uid: failed to get mbox guid");
+
+        return -1;
     }
 
     /* build a JSON object to query the last uid */
@@ -167,8 +184,6 @@ fts_backend_elasticsearch_get_last_uid(struct fts_backend *_backend,
 static struct fts_backend_update_context *
 fts_backend_elasticsearch_update_init(struct fts_backend *_backend)
 {
-    i_debug("fts-elasticsearch: update_init called");
-
     /* TODO: update_init only gets called when searching on text?? */
     struct elasticsearch_fts_backend_update_context *ctx;
 
@@ -184,7 +199,6 @@ fts_backend_elasticsearch_update_init(struct fts_backend *_backend)
 static int
 fts_backend_elasticsearch_update_deinit(struct fts_backend_update_context *_ctx)
 {
-    i_debug("fts-elasticsearch: update_deinit called");
     struct elasticsearch_fts_backend_update_context *ctx =
         (struct elasticsearch_fts_backend_update_context *)_ctx;
     struct elasticsearch_fts_backend *backend =
@@ -213,7 +227,6 @@ static void
 fts_backend_elasticsearch_update_set_mailbox(struct fts_backend_update_context *_ctx,
                                              struct mailbox *box)
 {
-    i_debug("fts-elasticsearch: update_set_mailbox called");
     struct elasticsearch_fts_backend_update_context *ctx =
         (struct elasticsearch_fts_backend_update_context *)_ctx;
 

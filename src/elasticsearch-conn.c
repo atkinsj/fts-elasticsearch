@@ -127,9 +127,6 @@ int elasticsearch_connection_post(struct elasticsearch_connection *conn,
     struct http_client_request *http_req;
     struct istream *post_payload;
 
-    /*i_debug("POSTING: %s", cmd);*/
-    i_debug("URL: %s", url);
-
     /* binds a callback object to elasticsearch_connection_http_response */
     http_req = elasticsearch_connection_http_request(conn, url);
 
@@ -296,7 +293,7 @@ static int elasticsearch_json_parse(struct elasticsearch_connection *conn,
     json_object * jobj = json_tokener_parse(str_c(data));
 
     if (jobj == NULL) {
-        i_debug("fts-elasticsearch: parsing of JSON reply failed, likely >1Mb result");
+        i_error("fts-elasticsearch: parsing of JSON reply failed, likely >1Mb result");
         return -1;
     }
 
