@@ -29,7 +29,7 @@ The installation process for fts-elasticsearch is as follows:
 
 In dovecot/conf.d/10-mail.conf:
 
-	mail_plugins = fts fts_solr
+	mail_plugins = fts fts_elasticsearch
 
 In dovecot/conf.d/90-plugins.conf:
 
