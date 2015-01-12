@@ -38,6 +38,9 @@ struct elasticsearch_fts_backend_update_context {
      * it is not actually valid JSON and thus can't be built with json-c. */
     string_t *json_request;
 
+    /* expunges and updates get called in the same message */
+    string_t *expunge_json_request;
+
     /* builds the current message as a JSON object so we can append it later. */
     json_object *message;
 
@@ -131,14 +134,13 @@ fts_backend_elasticsearch_get_last_uid(struct fts_backend *_backend,
      *     last_uid that matches Dovecot and it won't realise we need updating
      *  2. if data has been indexed by Dovecot but missed by ES (outage, etc)
      *     then it won't ever make it to the ES index either.
+     *
+     * TODO: find a better way to implement this
      **/
     if (fts_index_get_header(box, &hdr)) {
         *last_uid_r = hdr.last_indexed_uid;
         return 0;
     }
-
-    i_error("we're updating our index now");
-
 
     if (fts_mailbox_get_guid(box, &box_guid) < 0) {
         i_debug("fts-elasticsearch: get_last_uid: failed to get mbox guid");
@@ -192,6 +194,7 @@ fts_backend_elasticsearch_update_init(struct fts_backend *_backend)
     ctx->current_field = NULL;
     ctx->temp = NULL;
     ctx->json_request = NULL;
+    ctx->expunge_json_request = NULL;
 
     return &ctx->ctx;
 }
@@ -204,17 +207,30 @@ fts_backend_elasticsearch_update_deinit(struct fts_backend_update_context *_ctx)
     struct elasticsearch_fts_backend *backend =
         (struct elasticsearch_fts_backend *)_ctx->backend;
 
-    /* this gets called when the last message is finished, so close it up */
-    fts_backend_elasticsearch_doc_close(ctx);
+    /* expunges will also end up here; only clean-up and post updates */
+    if (ctx->json_request != NULL) {
+        /* this gets called when the last message is finished, so close it up */
+        fts_backend_elasticsearch_doc_close(ctx);
 
-    /* do our bulk post */
-    elasticsearch_connection_update(backend->elasticsearch_conn, str_c(ctx->json_request));
+        /* do our bulk post */
+        elasticsearch_connection_update(backend->elasticsearch_conn,
+                                        str_c(ctx->json_request));
 
-    /* cleanup */
-    memset(ctx->box_guid, 0, sizeof(ctx->box_guid));
-    str_free(&ctx->current_field);
-    str_free(&ctx->temp);
-    str_free(&ctx->json_request);
+        /* cleanup */
+        memset(ctx->box_guid, 0, sizeof(ctx->box_guid));
+        str_free(&ctx->current_field);
+        str_free(&ctx->temp);
+        str_free(&ctx->json_request); 
+    }
+
+    if (ctx->expunges) {
+        /* do our bulk post */
+        elasticsearch_connection_update(backend->elasticsearch_conn,
+                                        str_c(ctx->expunge_json_request));
+
+        str_free(&ctx->expunge_json_request);
+    }
+
     i_free(ctx);
     
     return 0;
@@ -262,7 +278,8 @@ fts_backend_elasticsearch_update_set_mailbox(struct fts_backend_update_context *
   */
 static void
 fts_backend_elasticsearch_doc_open(struct elasticsearch_fts_backend_update_context *_ctx,
-                                   uint32_t uid)
+                                   uint32_t uid, string_t *json_request,
+                                   json_object *message, const char *action_name)
 {
     struct elasticsearch_fts_backend_update_context *ctx =
         (struct elasticsearch_fts_backend_update_context *)_ctx;
@@ -280,19 +297,19 @@ fts_backend_elasticsearch_doc_open(struct elasticsearch_fts_backend_update_conte
     json_object_object_add(temp, "refresh", json_object_new_string("true"));
 
     json_object *action = json_object_new_object();
-    json_object_object_add(action, "index", temp);
+    json_object_object_add(action, action_name, temp);
 
-    str_append(ctx->json_request, json_object_to_json_string(action));
-    str_append(ctx->json_request, "\n");
+    str_append(json_request, json_object_to_json_string(action));
+    str_append(json_request, "\n");
 
     json_object *jint = json_object_new_int(uid);
-    json_object_object_add(ctx->message, "uid", jint);
+    json_object_object_add(message, "uid", jint);
 
     json_object *  jstring = json_object_new_string(ctx->box_guid);
-    json_object_object_add(ctx->message, "box", jstring);
+    json_object_object_add(message, "box", jstring);
 
     jstring = json_object_new_string(ctx->ctx.backend->ns->owner->username);
-    json_object_object_add(ctx->message, "user", jstring);
+    json_object_object_add(message, "user", jstring);
 
     /* clean-up */
     json_object_put(action);
@@ -322,7 +339,8 @@ fts_backend_elasticsearch_uid_changed(struct elasticsearch_fts_backend_update_co
     ctx->prev_uid = uid;
     ctx->truncate_header = FALSE;
     ctx->message = json_object_new_object();
-    fts_backend_elasticsearch_doc_open(ctx, uid);
+    fts_backend_elasticsearch_doc_open(ctx, uid, ctx->json_request,
+                                       ctx->message, "index");
 }
 
 /**
@@ -397,12 +415,26 @@ fts_backend_elasticsearch_update_unset_build_key(struct fts_backend_update_conte
 }
 
 static void
-fts_backend_elasticsearch_update_expunge(struct fts_backend_update_context *ctx,
+fts_backend_elasticsearch_update_expunge(struct fts_backend_update_context *_ctx,
                                          uint32_t uid)
 {
-    i_debug("fts-elasticsearch: update_expunge called");
-    /* TODO: called when a message moves from one mailbox to another (atleast) */
-    return;
+    struct elasticsearch_fts_backend_update_context *ctx =
+        (struct elasticsearch_fts_backend_update_context *)_ctx;
+
+    ctx->expunges = TRUE;
+
+    /* TODO: we should proabably intiailise this in uid_changed or reorder calls */
+    if (ctx->expunge_json_request == NULL)
+        ctx->expunge_json_request = str_new(default_pool, 1024 * 64);
+
+    json_object *message = json_object_new_object();
+
+    /* we don't need a corresponding doc_close call, the bulk delete API is shorter */
+    fts_backend_elasticsearch_doc_open(ctx, uid, ctx->expunge_json_request,
+                                       message, "delete");
+
+    /* clean-up */
+    json_object_put(message);
 }
 
 static int fts_backend_elasticsearch_refresh(struct fts_backend *backend ATTR_UNUSED)
