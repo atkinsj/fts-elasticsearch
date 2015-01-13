@@ -11,7 +11,7 @@ This plugin is highly experimental and under active development. Expect changes,
 * JSON-C
 * ElasticSearch 1.0+ for your server
 
-## Compilation
+## Compiling
 This plugin needs to compile against the Dovecot source for the version you intend to run it on. A dovecot-devel package is unfortunately insufficient as it does not include the required fts API header files. 
 
 You can provide the path to your source tree by passing --with-dovecot= to ./configure.
