@@ -474,7 +474,7 @@ elasticsearch_add_definite_query(struct mail_search_arg *arg, json_object *value
 
 static bool
 elasticsearch_add_definite_query_args(json_object *fields, json_object *value,
-                                      struct mail_search_arg *arg, bool and_args)
+                                      struct mail_search_arg *arg)
 {
     bool field_added = FALSE;
 
@@ -482,7 +482,7 @@ elasticsearch_add_definite_query_args(json_object *fields, json_object *value,
         /* multiple fields have an initial arg of nothing useful and subargs */
         if (arg->value.subargs != NULL)
             field_added = elasticsearch_add_definite_query_args(fields, value,
-                arg->value.subargs, and_args);
+                arg->value.subargs);
 
         if (elasticsearch_add_definite_query(arg, value, fields)) {
             /* this is important to set. if this is FALSE, Dovecot will fail
@@ -490,10 +490,6 @@ elasticsearch_add_definite_query_args(json_object *fields, json_object *value,
              * this argument. */
             arg->match_always = TRUE;
             field_added = TRUE;
-
-            if (and_args) {
-                /* TODO: build the syntax for OR in JSON */
-            }
         }
     }
 
@@ -513,6 +509,7 @@ fts_backend_elasticsearch_lookup(struct fts_backend *_backend, struct mailbox *b
         (struct elasticsearch_fts_backend *)_backend;
 
     struct elasticsearch_result **es_results;
+    /* TODO: figure out how to support this in ES. */
     bool and_args = (flags & FTS_LOOKUP_FLAG_AND_ARGS) != 0;
     struct mailbox_status status;
     const char *box_guid;
@@ -533,7 +530,7 @@ fts_backend_elasticsearch_lookup(struct fts_backend *_backend, struct mailbox *b
     json_object *fields = json_object_new_array();
     json_object *value = json_object_new_object();
 
-    valid = elasticsearch_add_definite_query_args(fields, value, args, and_args);
+    valid = elasticsearch_add_definite_query_args(fields, value, args);
 
     json_object_object_add(value, "fields", fields);
     json_object_object_add(term, "query_string", value);
@@ -550,8 +547,6 @@ fts_backend_elasticsearch_lookup(struct fts_backend *_backend, struct mailbox *b
     json_object_array_add(fields_root, json_object_new_string("uid"));
     json_object_array_add(fields_root, json_object_new_string("box"));
     json_object_object_add(query, "fields", fields_root);
-
-    /* TODO: we also need to support maybe_uid's */
 
     ret = elasticsearch_connection_select(backend->elasticsearch_conn, pool,
         json_object_to_json_string(query), box_guid, &es_results);
