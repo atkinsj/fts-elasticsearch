@@ -49,3 +49,7 @@ AC_TYPE_UINT32_T
 AC_CHECK_FUNCS([memset])
 
 AC_OUTPUT
+
+echo
+echo "Install prefix       : $prefix"
+echo "Lib install prefix   : $dovecot_pkgincludedir"
