@@ -17,15 +17,12 @@ You can provide the path to your source tree by passing --with-dovecot= to ./con
 
 An example build may look like:
 
-	./autogen.sh
+    ./autogen.sh
     ./configure --with-dovecot=/path/to/dovecot/src/root
     make
+    make install
 
-## Installation
-The installation process for fts-elasticsearch is as follows:
-	
-	cp src/.libs/lib21_fts_elasticsearch_plugin.so /usr/local/dovecot/libs/
-
+## Configuration
 In dovecot/conf.d/10-mail.conf:
 
 	mail_plugins = fts fts_elasticsearch
