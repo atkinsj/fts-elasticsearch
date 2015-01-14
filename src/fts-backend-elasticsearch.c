@@ -449,8 +449,10 @@ elasticsearch_add_definite_query(struct mail_search_arg *arg, json_object *value
     case SEARCH_HEADER: /* fall through */
     case SEARCH_HEADER_ADDRESS: /* fall through */
     case SEARCH_HEADER_COMPRESS_LWSP:
-        if (!fts_header_want_indexed(arg->hdr_field_name))
+        if (!fts_header_want_indexed(arg->hdr_field_name)) {
+            i_debug("fts-elasticsearch: fuekd %s was skipped", arg->hdr_field_name);
             return FALSE;
+        }
 
         json_object_array_add(fields,
             json_object_new_string(t_str_lcase(arg->hdr_field_name)));
@@ -491,9 +493,6 @@ elasticsearch_add_definite_query_args(json_object *fields, json_object *value,
         }
     }
 
-    /* false indicates that we didn't add anything; at the very least
-     * this happens when multiple fields are specified in the search. */
-    /* TODO: investigate if Dovecot supports multi-field searching. */
     return field_added;
 }
 
@@ -577,8 +576,9 @@ int fts_backend_elasticsearch_lookup_multi(struct fts_backend *backend,
                                            struct fts_multi_result *result)
 {
     i_debug("fts-elasticsearch: lookup multi called");
-    /* TODO: has this been deprecated? testing with Roundcube, it calls _lookup multiple times
-     * once per mailbox. need to test with other clients. */
+
+    /* TODO: find a client that calls this. */
+    
     return 0;
 }
 
