@@ -313,8 +313,6 @@ fts_backend_elasticsearch_uid_changed(struct elasticsearch_fts_backend_update_co
 
         ctx->current_field = str_new(default_pool, 1024 * 64);
         ctx->temp = str_new(default_pool, 1024 * 64);
-
-        /* TODO: this isn't big enough for large e-mails. */
         ctx->json_request = str_new(default_pool, 1024 * 64);
     } else {
         /* this is the end of an old message. nb: the last message to be indexed
