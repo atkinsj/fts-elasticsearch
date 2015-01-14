@@ -109,11 +109,6 @@ fts_backend_elasticsearch_doc_close(struct elasticsearch_fts_backend_update_cont
     }
 }
 
-/*
- * if the last_uid_r you return does not match the most recent UID Dovecot
- * sees in its index log then you will begin getting update calls to
- * update your index.
- */
 static int
 fts_backend_elasticsearch_get_last_uid(struct fts_backend *_backend,
                                        struct mailbox *box,
@@ -236,9 +231,6 @@ fts_backend_elasticsearch_update_deinit(struct fts_backend_update_context *_ctx)
     return 0;
 }
 
-/**
- * this is called when the mailbox that messages are being indexed to changes.
- */
 static void
 fts_backend_elasticsearch_update_set_mailbox(struct fts_backend_update_context *_ctx,
                                              struct mailbox *box)
@@ -273,9 +265,6 @@ fts_backend_elasticsearch_update_set_mailbox(struct fts_backend_update_context *
     return;
 }
 
-/**
-  * begin building the object we're going to POST.
-  */
 static void
 fts_backend_elasticsearch_doc_open(struct elasticsearch_fts_backend_update_context *_ctx,
                                    uint32_t uid, string_t *json_request,
@@ -315,9 +304,6 @@ fts_backend_elasticsearch_doc_open(struct elasticsearch_fts_backend_update_conte
     json_object_put(action);
 }
 
-/**
-  * called when we've moved on to a new message
-  */
 static void
 fts_backend_elasticsearch_uid_changed(struct elasticsearch_fts_backend_update_context *ctx,
                                       uint32_t uid)
@@ -343,9 +329,6 @@ fts_backend_elasticsearch_uid_changed(struct elasticsearch_fts_backend_update_co
                                        ctx->message, "index");
 }
 
-/**
- * This is called once per header field of the message and preceeds the build_more call.
- */
 static bool
 fts_backend_elasticsearch_update_set_build_key(struct fts_backend_update_context *_ctx,
                                          const struct fts_backend_build_key *key)
@@ -377,9 +360,6 @@ fts_backend_elasticsearch_update_set_build_key(struct fts_backend_update_context
     return TRUE;
 }
 
-/**
- * This is called one or more times per header field.
- */
 static int
 fts_backend_elasticsearch_update_build_more(struct fts_backend_update_context *_ctx,
                                       const unsigned char *data, size_t size)
@@ -395,9 +375,6 @@ fts_backend_elasticsearch_update_build_more(struct fts_backend_update_context *_
     return 0;
 }
 
-/**
- * This is called once per header field at the completion of value processing.
- */
 static void
 fts_backend_elasticsearch_update_unset_build_key(struct fts_backend_update_context *_ctx)
 {
@@ -496,14 +473,16 @@ elasticsearch_add_definite_query(struct mail_search_arg *arg, json_object *value
 }
 
 static bool
-elasticsearch_add_definite_query_args(json_object *term, struct mail_search_arg *arg,
-                                      bool and_args)
+elasticsearch_add_definite_query_args(json_object *fields, json_object *value,
+                                      struct mail_search_arg *arg, bool and_args)
 {
     bool field_added = FALSE;
 
     for (; arg != NULL; arg = arg->next) {
-        json_object *value = json_object_new_object();
-        json_object *fields = json_object_new_array();
+        /* multiple fields have an initial arg of nothing useful and subargs */
+        if (arg->value.subargs != NULL)
+            field_added = elasticsearch_add_definite_query_args(fields, value,
+                arg->value.subargs, and_args);
 
         if (elasticsearch_add_definite_query(arg, value, fields)) {
             /* this is important to set. if this is FALSE, Dovecot will fail
@@ -511,10 +490,6 @@ elasticsearch_add_definite_query_args(json_object *term, struct mail_search_arg 
              * this argument. */
             arg->match_always = TRUE;
             field_added = TRUE;
-
-            json_object_object_add(value, "fields", fields);
-            json_object_object_add(term, "query_string", value);
-            
 
             if (and_args) {
                 /* TODO: build the syntax for OR in JSON */
@@ -541,6 +516,7 @@ fts_backend_elasticsearch_lookup(struct fts_backend *_backend, struct mailbox *b
     bool and_args = (flags & FTS_LOOKUP_FLAG_AND_ARGS) != 0;
     struct mailbox_status status;
     const char *box_guid;
+    bool valid = FALSE;
     int ret = -1;
 
     pool_t pool = pool_alloconly_create("fts elasticsearch search", 1024);
@@ -554,13 +530,16 @@ fts_backend_elasticsearch_lookup(struct fts_backend *_backend, struct mailbox *b
 
     /* start building our query object */
     json_object *term = json_object_new_object();
-    bool valid_search =
-        elasticsearch_add_definite_query_args(term, args, and_args);
+    json_object *fields = json_object_new_array();
+    json_object *value = json_object_new_object();
 
-    if (!valid_search) {
-        /* TODO: what should we return here? */
+    valid = elasticsearch_add_definite_query_args(fields, value, args, and_args);
+
+    json_object_object_add(value, "fields", fields);
+    json_object_object_add(term, "query_string", value);
+
+    if (!valid)
         return -1;
-    }
 
     /* wrap it in the ES 'query' field */
     json_object *query = json_object_new_object();
