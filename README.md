@@ -1,17 +1,17 @@
 # fts-elasticsearch
 fts-elasticsearch is a Dovecot full-text search indexing plugin that uses ElasticSearch as a backend.
 
-Dovecot communicates to ES using HTTP/JSON queries. It currently supports automatic indexing and searching of e-mail.
+Dovecot communicates to ES using HTTP/JSON queries. It supports automatic indexing and searching of e-mail.
 
 ### Experimental
-This plugin is currently highly experimental and under active development. Expect changes, bugs, breaks.
+This plugin is highly experimental and under active development. Expect changes, bugs, breaks.
 
 ## Requirements
 * Minimum Dovecot version has not yet been determined
 * JSON-C
 * ElasticSearch 1.0+ for your server
 
-## Compilation
+## Compiling
 This plugin needs to compile against the Dovecot source for the version you intend to run it on. A dovecot-devel package is unfortunately insufficient as it does not include the required fts API header files. 
 
 You can provide the path to your source tree by passing --with-dovecot= to ./configure.
@@ -69,8 +69,6 @@ An example of pushed data for a basic e-mail with no attachments:
 
 ## TODO
 There are a number of things left to be implemented:
-* Search
-* Expunging of deleted e-mails
 * Rescan
 * Optimisation (if any)
 
@@ -78,6 +76,4 @@ There are a number of things left to be implemented:
 Dovecot currently supports two primary full text search indexing plugins `fts-solr` and `fts-squat`. I wanted to use an FTS service that I already had set-up and that wasn't quite as heavy as Solr, primarily to consolidate infrastructure and to focus resources on optimising our ES instances.
 
 ## Thanks
-This plugin borrows heavily from dovecot-pigeonhole for the automatic detection of dovecont-config (see m4/dovecot.m4).
-
-Additionally the fts-solr and fts-squat plugins were used extensively as reference material for understanding the Dovecot FTS API.
+This plugin borrows heavily from dovecot itself particularly for the automatic detection of dovecont-config (see m4/dovecot.m4). The fts-solr and fts-squat plugins were also used as reference material for understanding the Dovecot FTS API.
