@@ -82,7 +82,7 @@ int elasticsearch_connection_init(const char *url, bool debug,
         http_set.max_pipelined_requests = 1;
         http_set.max_redirects = 1;
         http_set.max_attempts = 3;
-        http_set.debug = FALSE; /*todo: debug*/
+        http_set.debug = debug;
         elasticsearch_http_client = http_client_init(&http_set);
     }
 
