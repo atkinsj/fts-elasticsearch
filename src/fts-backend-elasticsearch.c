@@ -431,6 +431,34 @@ static int fts_backend_elasticsearch_optimize(struct fts_backend *backend ATTR_U
     return 0;
 }
 
+static const char *elasticsearch_escape_query_string(const char *str)
+{
+    const char *escape_chars = "+-&&||!(){}[]^\"~*?:\\/";
+    const char *p;
+
+    string_t *ret;
+
+    for (p = str; *p != '\0'; p++) {
+        if (strchr(escape_chars, *str) != NULL)
+            break;
+    }
+
+    if (*p == '\0')
+        return str;
+
+    ret = t_str_new((size_t) (p - str) + 128);
+    str_append_n(ret, str, (size_t) (p - str));
+    
+    for (; *p != '\0'; p++) {
+        if (strchr(escape_chars, *p) != NULL)
+            str_append_c(ret, '\\\\');
+
+        str_append_c(ret, *p);
+    }  
+
+    return str_c(ret);
+}
+
 static bool
 elasticsearch_add_definite_query(struct mail_search_arg *arg, json_object *value,
                                  json_object *fields)
@@ -450,7 +478,8 @@ elasticsearch_add_definite_query(struct mail_search_arg *arg, json_object *value
     case SEARCH_HEADER_ADDRESS: /* fall through */
     case SEARCH_HEADER_COMPRESS_LWSP:
         if (!fts_header_want_indexed(arg->hdr_field_name)) {
-            i_debug("fts-elasticsearch: fuekd %s was skipped", arg->hdr_field_name);
+            i_debug("fts-elasticsearch: field %s was skipped", arg->hdr_field_name);
+
             return FALSE;
         }
 
@@ -467,7 +496,9 @@ elasticsearch_add_definite_query(struct mail_search_arg *arg, json_object *value
         i_debug("fts-elasticsearch: arg->match_not is true");
 
     /* we always want to add a query value */
-    json_object_object_add(value, "query", json_object_new_string(arg->value.str));
+    const char *cleaned = elasticsearch_escape_query_string(arg->value.str);
+
+    json_object_object_add(value, "query", json_object_new_string(cleaned));
 
     return TRUE;
 }
@@ -578,7 +609,7 @@ int fts_backend_elasticsearch_lookup_multi(struct fts_backend *backend,
     i_debug("fts-elasticsearch: lookup multi called");
 
     /* TODO: find a client that calls this. */
-    
+
     return 0;
 }
 
