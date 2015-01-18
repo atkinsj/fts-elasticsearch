@@ -52,4 +52,4 @@ AC_OUTPUT
 
 echo
 echo "Install prefix       : $prefix"
-echo "Lib install prefix   : $dovecot_pkgincludedir"
+echo "Lib install prefix   : $dovecot_pkglibdir"
