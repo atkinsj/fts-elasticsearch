@@ -418,7 +418,7 @@ static int fts_backend_elasticsearch_refresh(struct fts_backend *backend ATTR_UN
     return 0;
 }
 
-static int fts_backend_elasticsearch_rescan(struct fts_backend *backend)
+static int fts_backend_elasticsearch_rescan(struct fts_backend *backend ATTR_UNUSED)
 {
     i_debug("fts-elasticsearch: RESCAN");
     /* TODO */
@@ -433,28 +433,26 @@ static int fts_backend_elasticsearch_optimize(struct fts_backend *backend ATTR_U
 
 static const char *elasticsearch_escape_query_string(const char *str)
 {
-    const char *escape_chars = "+-&&||!(){}[]^\"~*?:\\/";
-    const char *p;
+    const char *escape_chars = "+-&&||!(){}[]^\"~?:\\/";
+    const char *p = str;
 
     string_t *ret;
 
-    for (p = str; *p != '\0'; p++) {
-        if (strchr(escape_chars, *str) != NULL)
-            break;
-    }
-
-    if (*p == '\0')
-        return str;
-
     ret = t_str_new((size_t) (p - str) + 128);
     str_append_n(ret, str, (size_t) (p - str));
+
+    /* TODO: What is the expected IMAP SEARCH behaviour?
+     * Is everything a partial matcH? */
+    str_append(ret, "*");
     
-    for (; *p != '\0'; p++) {
+    for (p = str; *p != '\0'; p++) {
         if (strchr(escape_chars, *p) != NULL)
             str_append_c(ret, '\\\\');
 
         str_append_c(ret, *p);
-    }  
+    }
+
+    str_append(ret, "*");
 
     return str_c(ret);
 }
@@ -537,8 +535,6 @@ fts_backend_elasticsearch_lookup(struct fts_backend *_backend, struct mailbox *b
         (struct elasticsearch_fts_backend *)_backend;
 
     struct elasticsearch_result **es_results;
-    /* TODO: figure out how to support this in ES. */
-    bool and_args = (flags & FTS_LOOKUP_FLAG_AND_ARGS) != 0;
     struct mailbox_status status;
     const char *box_guid;
     bool valid = FALSE;
