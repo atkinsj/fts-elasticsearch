@@ -6,7 +6,7 @@ Dovecot communicates to ES using HTTP/JSON queries. It supports automatic indexi
 I'm hoping to approach a stable 0.1 release in the next week or so but I need testing across various mail clients and environments. Any help appreciated.
 
 ## Requirements
-* Dovecot 2.1+
+* Dovecot 2.2+
 * JSON-C
 * ElasticSearch 1.0+ for your server
 
