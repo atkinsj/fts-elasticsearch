@@ -1,7 +1,7 @@
 #                                               -*- Autoconf -*-
 # Process this file with autoconf to produce a configure script.
 
-AC_PREREQ([2.69])
+AC_PREREQ([2.53])
 AC_INIT([fts-elasticsearch], [0.1.0], [https://github.com/ascendantcom/fts-elasticsearch])
 AM_INIT_AUTOMAKE([no-define foreign tar-ustar])
 AC_OUTPUT(Makefile src/Makefile)
