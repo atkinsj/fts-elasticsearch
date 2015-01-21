@@ -47,7 +47,6 @@ An example of pushed data for a basic e-mail with no attachments:
 	{
 		"uid": 3,
 		"box": "f40efa2f8f44ad54424000006e8130ae",
-		"user": "josh",
 		"Return-Path": "<josh@localhost.localdomain>",
 		"X-Original-To": "josh",
 		"Delivered-To": "josh@localhost.localdomain",

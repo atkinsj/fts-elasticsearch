@@ -297,9 +297,6 @@ fts_backend_elasticsearch_doc_open(struct elasticsearch_fts_backend_update_conte
     json_object *  jstring = json_object_new_string(ctx->box_guid);
     json_object_object_add(message, "box", jstring);
 
-    jstring = json_object_new_string(ctx->ctx.backend->ns->owner->username);
-    json_object_object_add(message, "user", jstring);
-
     /* clean-up */
     json_object_put(action);
 }
