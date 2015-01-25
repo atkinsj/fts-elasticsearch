@@ -434,15 +434,17 @@ fts_backend_elasticsearch_update_expunge(struct fts_backend_update_context *_ctx
 
 static int fts_backend_elasticsearch_refresh(struct fts_backend *backend ATTR_UNUSED)
 {
-    /* no value in implementing this with ElasticSearch as it handles caching. */
+    /* TODO: figure out how to use this to solve the problem where an update
+     * caused by a search ends up with no resutls. */
     return 0;
 }
 
 static int fts_backend_elasticsearch_rescan(struct fts_backend *backend ATTR_UNUSED)
 {
     i_debug("fts-elasticsearch: RESCAN");
-    /* TODO */
-    return 0;
+    /* TODO: can't actually get this to be called with doveadm fts rescan? */
+    
+    return fts_backend_reset_last_uids(backend);
 }
 
 static int fts_backend_elasticsearch_optimize(struct fts_backend *backend ATTR_UNUSED)
