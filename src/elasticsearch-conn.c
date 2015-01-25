@@ -360,12 +360,17 @@ static void
 elasticsearch_connection_select_response(const struct http_response *response,
                                          struct elasticsearch_connection *conn)
 {
-    /* 404's usually mean index is missing. it could mean you also hit a non-ES
-     * service but this seems better than a second indices exists lookup */
+    /* 404's usually mean the index is missing. it could mean you also hit a
+     * non-ES service but this seems better than a second indices exists lookup */
     if (response->status / 100 != 2 && response->status != 404) {
         i_error("fts_elasticsearch: lookup failed: %s", response->reason);
         conn->request_status = -1;
         return;
+    }
+
+    /* give the user a chance to troubleshoot with debug enabled */
+    if (conn->debug && response->status == 404) {
+        i_debug("fts_elasticsearch: lookup failed due to 404 not found");
     }
 
     if (response->payload == NULL) {
