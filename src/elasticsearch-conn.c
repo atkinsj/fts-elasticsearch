@@ -167,7 +167,6 @@ void json_parse_array(json_object *jobj, char *key, struct elasticsearch_connect
             json_parse_array(jvalue, NULL, conn);
         }
         else if (type != json_type_object) {
-            /* TODO: what do we do here? */
         }
         else {
             json_parse(jvalue, conn);
@@ -361,9 +360,9 @@ static void
 elasticsearch_connection_select_response(const struct http_response *response,
                                          struct elasticsearch_connection *conn)
 {
-    if (response->status / 100 != 2) {
-        /* TODO: this isn't really an error sometimes; we punt data at mailboxes
-         * that may not exist if the index has been rebuilt, causing a 404 from ES. */
+    /* 404's usually mean index is missing. it could mean you also hit a non-ES
+     * service but this seems better than a second indices exists lookup */
+    if (response->status / 100 != 2 && response->status != 404) {
         i_error("fts_elasticsearch: lookup failed: %s", response->reason);
         conn->request_status = -1;
         return;

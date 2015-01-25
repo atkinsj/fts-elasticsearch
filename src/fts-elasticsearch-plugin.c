@@ -11,8 +11,6 @@
 
 const char *fts_elasticsearch_plugin_version = DOVECOT_ABI_VERSION;
 
-/*struct http_client *elasticsearch_http_client = NULL;*/
-
 struct fts_elasticsearch_user_module fts_elasticsearch_user_module =
     MODULE_CONTEXT_INIT(&mail_user_module_register);
 

@@ -186,7 +186,6 @@ fts_backend_elasticsearch_get_last_uid(struct fts_backend *_backend,
 static struct fts_backend_update_context *
 fts_backend_elasticsearch_update_init(struct fts_backend *_backend)
 {
-    /* TODO: update_init only gets called when searching on text?? */
     struct elasticsearch_fts_backend_update_context *ctx;
 
     ctx = i_new(struct elasticsearch_fts_backend_update_context, 1);
@@ -388,10 +387,8 @@ fts_backend_elasticsearch_update_build_more(struct fts_backend_update_context *_
     
     str_append_n(ctx->temp, data, size);
 
+    /* keep track of the total request size for chunking */
     ctx->request_size += size;
-
-    /* TODO: we instantiated ctx->temp as 1024 * 64 so we should do some
-     * kind of chunking here and make use of update for mid-message posting. */
 
     return 0;
 }
@@ -421,7 +418,7 @@ fts_backend_elasticsearch_update_expunge(struct fts_backend_update_context *_ctx
 
     ctx->expunges = TRUE;
 
-    /* TODO: we should proabably intiailise this in uid_changed or reorder calls */
+    /* set-up our json request */
     if (ctx->expunge_json_request == NULL)
         ctx->expunge_json_request = str_new(default_pool, 1024 * 64);
 
@@ -450,7 +447,6 @@ static int fts_backend_elasticsearch_rescan(struct fts_backend *backend ATTR_UNU
 
 static int fts_backend_elasticsearch_optimize(struct fts_backend *backend ATTR_UNUSED)
 {
-    /* TODO: are there any optimisations we can do here? */
     return 0;
 }
 
@@ -464,8 +460,7 @@ static const char *elasticsearch_escape_query_string(const char *str)
     ret = t_str_new((size_t) (p - str) + 128);
     str_append_n(ret, str, (size_t) (p - str));
 
-    /* TODO: What is the expected IMAP SEARCH behaviour?
-     * Is everything a partial matcH? */
+    /* TODO: What is the expected IMAP SEARCH behaviour? Is everything a partial match? */
     str_append(ret, "*");
     
     for (p = str; *p != '\0'; p++) {
