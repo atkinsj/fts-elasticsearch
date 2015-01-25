@@ -17,6 +17,8 @@
 #include <inttypes.h>
 #include <json-c/json.h>
 
+#define ELASTICSEARCH_BULK_SIZE 15000000 /* 15 megabytes */
+
 struct elasticsearch_fts_backend {
     struct fts_backend backend;
     struct elasticsearch_connection *elasticsearch_conn;
@@ -40,6 +42,9 @@ struct elasticsearch_fts_backend_update_context {
 
     /* expunges and updates get called in the same message */
     string_t *expunge_json_request;
+
+    /* current request size */
+    size_t request_size;
 
     /* builds the current message as a JSON object so we can append it later. */
     json_object *message;
@@ -216,6 +221,7 @@ fts_backend_elasticsearch_update_deinit(struct fts_backend_update_context *_ctx)
         str_free(&ctx->current_field);
         str_free(&ctx->temp);
         str_free(&ctx->json_request); 
+        ctx->request_size = 0;
     }
 
     if (ctx->expunges) {
@@ -302,19 +308,37 @@ fts_backend_elasticsearch_doc_open(struct elasticsearch_fts_backend_update_conte
 }
 
 static void
-fts_backend_elasticsearch_uid_changed(struct elasticsearch_fts_backend_update_context *ctx,
+fts_backend_elasticsearch_uid_changed(struct fts_backend_update_context *_ctx,
                                       uint32_t uid)
 {
+    struct elasticsearch_fts_backend_update_context *ctx =
+        (struct elasticsearch_fts_backend_update_context *)_ctx;
+
     if (!ctx->documents_added) {
         i_assert(ctx->prev_uid == 0);
 
         ctx->current_field = str_new(default_pool, 1024 * 64);
         ctx->temp = str_new(default_pool, 1024 * 64);
         ctx->json_request = str_new(default_pool, 1024 * 64);
+        ctx->request_size = 0;
     } else {
         /* this is the end of an old message. nb: the last message to be indexed
          * will not reach here but will instead be caught in update_deinit. */
         fts_backend_elasticsearch_doc_close(ctx);
+    }
+
+    /* chunk up our requests in to reasonable sizes */
+    if (ctx->request_size > ELASTICSEARCH_BULK_SIZE) {        
+        struct elasticsearch_fts_backend *backend =
+            (struct elasticsearch_fts_backend *)_ctx->backend;
+
+        /* do an early post */
+        elasticsearch_connection_update(backend->elasticsearch_conn,
+                                        str_c(ctx->json_request));
+
+        /* reset our tracking variables */
+        str_truncate(ctx->json_request, 0);
+        ctx->request_size = 0;
     }
     
     ctx->prev_uid = uid;
@@ -333,7 +357,7 @@ fts_backend_elasticsearch_update_set_build_key(struct fts_backend_update_context
 
     /* if the uid doesn't match our expected one, we've moved on to a new message */
     if (key->uid != ctx->prev_uid)
-        fts_backend_elasticsearch_uid_changed(ctx, key->uid);
+        fts_backend_elasticsearch_uid_changed(_ctx, key->uid);
 
     switch (key->type) {
     case FTS_BACKEND_BUILD_KEY_HDR: /* fall through */
@@ -363,6 +387,8 @@ fts_backend_elasticsearch_update_build_more(struct fts_backend_update_context *_
         (struct elasticsearch_fts_backend_update_context *)_ctx;
     
     str_append_n(ctx->temp, data, size);
+
+    ctx->request_size += size;
 
     /* TODO: we instantiated ctx->temp as 1024 * 64 so we should do some
      * kind of chunking here and make use of update for mid-message posting. */
