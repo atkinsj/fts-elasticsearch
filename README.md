@@ -9,6 +9,7 @@ I'm hoping to approach a stable 0.1 release in the next week or so but I need te
 * Dovecot 2.2+
 * JSON-C
 * ElasticSearch 1.0+ for your server
+* Autoconf 2.53+
 
 ## Compiling
 This plugin needs to compile against the Dovecot source for the version you intend to run it on. A dovecot-devel package is unfortunately insufficient as it does not include the required fts API header files. 
@@ -36,8 +37,8 @@ In dovecot/conf.d/90-plugins.conf:
 	}
 
 There are only two supported configuration parameters at the moment:
-* url=<elasticsearch url>: Required base URL
-* debug : Enables HTTP debugging
+* url=\<elasticsearch url\> Required base URL
+* debug Enables HTTP debugging
 
 ## ElasticSearch Indicies
 fts-elasticsearch creates an index per mail box with a hardcoded type of 'mail'. It creates one field for each field in the e-mail header and for the body.
@@ -84,6 +85,7 @@ An example search:
 There are a number of things left to be implemented:
 * Rescan
 * Optimisation (if any)
+* Multiple mailbox lookup (for clients that call lookup_multi; need to find one)
 
 ## Background
 Dovecot currently supports two primary full text search indexing plugins `fts-solr` and `fts-squat`. I wanted to use an FTS service that I already had set-up and that wasn't quite as heavy as Solr, primarily to consolidate infrastructure and to focus resources on optimising our ES instances.
