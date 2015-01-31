@@ -288,7 +288,6 @@ fts_backend_elasticsearch_doc_open(struct elasticsearch_fts_backend_update_conte
     json_object_object_add(temp, "_index", json_object_new_string(ctx->box_guid));
     json_object_object_add(temp, "_type", json_object_new_string("mail"));
     json_object_object_add(temp, "_id", json_object_new_int(uid));
-    json_object_object_add(temp, "refresh", json_object_new_string("true"));
 
     json_object *action = json_object_new_object();
     json_object_object_add(action, action_name, temp);
@@ -432,10 +431,13 @@ fts_backend_elasticsearch_update_expunge(struct fts_backend_update_context *_ctx
     json_object_put(message);
 }
 
-static int fts_backend_elasticsearch_refresh(struct fts_backend *backend ATTR_UNUSED)
+static int fts_backend_elasticsearch_refresh(struct fts_backend *_backend)
 {
-    /* TODO: figure out how to use this to solve the problem where an update
-     * caused by a search ends up with no resutls. */
+    struct elasticsearch_fts_backend *backend =
+        (struct elasticsearch_fts_backend *)_backend;
+
+    elasticsearch_connection_refresh(backend->elasticsearch_conn);
+
     return 0;
 }
 

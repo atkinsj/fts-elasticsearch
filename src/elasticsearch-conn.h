@@ -11,7 +11,8 @@ struct elasticsearch_connection;
 enum elasticsearch_post_type {
     ELASTICSEARCH_POST_TYPE_UPDATE = 0,
     ELASTICSEARCH_POST_TYPE_SELECT,
-    ELASTICSEARCH_POST_TYPE_LAST_UID
+    ELASTICSEARCH_POST_TYPE_LAST_UID,
+    ELASTICSEARCH_POST_TYPE_REFRESH,
 };
 
 struct elasticsearch_result {

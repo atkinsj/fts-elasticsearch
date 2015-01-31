@@ -257,6 +257,9 @@ void json_parse(json_object * jobj, struct elasticsearch_connection *conn)
         case ELASTICSEARCH_POST_TYPE_UPDATE:
             /* not implemented */
             break;
+        case ELASTICSEARCH_POST_TYPE_REFRESH:
+            /* not implemented */
+            break;
         }
 
         /* recursively process the json */
@@ -400,6 +403,9 @@ elasticsearch_connection_http_response(const struct http_response *response,
     case ELASTICSEARCH_POST_TYPE_UPDATE:
         elasticsearch_connection_update_response(response, conn);
         break;
+    case ELASTICSEARCH_POST_TYPE_REFRESH:
+        /* not implemented */
+        break;
     }
 }
 
@@ -417,6 +423,26 @@ elasticsearch_connection_http_request(struct elasticsearch_connection *conn,
     http_client_request_add_header(http_req, "Content-Type", "text/json");
 
     return http_req;
+}
+
+int elasticsearch_connection_refresh(struct elasticsearch_connection *conn)
+{
+    const char *url;
+
+    /* set-up the context */
+    conn->post_type = ELASTICSEARCH_POST_TYPE_REFRESH;
+
+    /* build the url */
+    /* TODO: we probably don't want to refresh the ENTIRE ES server */
+    url = t_strconcat(conn->http_base_url, "/_refresh/", NULL);
+
+    /* perform the actual POST */
+    elasticsearch_connection_post(conn, url, "");
+
+    if (conn->request_status < 0) 
+        return -1;
+
+    return 0;
 }
 
 int elasticsearch_connection_select(struct elasticsearch_connection *conn, pool_t pool,
