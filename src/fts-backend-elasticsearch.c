@@ -618,17 +618,10 @@ fts_backend_elasticsearch_lookup(struct fts_backend *_backend, struct mailbox *b
     return ret;
 }
 
-int fts_backend_elasticsearch_lookup_multi(struct fts_backend *backend,
-                                           struct mailbox *const boxes[],
-                                           struct mail_search_arg *args,
-                                           enum fts_lookup_flags flags,
-                                           struct fts_multi_result *result)
+static void fts_backend_elasticsearch_lookup_done(struct fts_backend *_backend)
 {
-    i_debug("fts-elasticsearch: lookup multi called");
-
-    /* TODO: find a client that calls this. */
-
-    return 0;
+    /* may as well call refresh; it is run anytime a lookup completes anyway. */
+    fts_backend_elasticsearch_refresh(_backend);
 }
 
 struct fts_backend fts_backend_elasticsearch = {
@@ -652,7 +645,7 @@ struct fts_backend fts_backend_elasticsearch = {
         fts_backend_elasticsearch_optimize,
         fts_backend_default_can_lookup,
         fts_backend_elasticsearch_lookup,
-        fts_backend_elasticsearch_lookup_multi,
+        fts_backend_elasticsearch_lookup_done,
         NULL
     }
 };

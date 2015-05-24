@@ -55,9 +55,7 @@ struct http_client_request*
 elasticsearch_connection_http_request(struct elasticsearch_connection *conn,
                                       const char *url);
 
-struct http_client_request*
-elasticsearch_connection_http_request(struct elasticsearch_connection *conn,
-                                      const char *url);
+int elasticsearch_connection_refresh(struct elasticsearch_connection *conn);
 
 int elasticsearch_connection_select(struct elasticsearch_connection *conn, pool_t pool,
     const char *query, const char *box, struct elasticsearch_result ***box_results_r);
