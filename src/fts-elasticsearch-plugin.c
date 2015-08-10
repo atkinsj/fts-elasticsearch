@@ -14,14 +14,21 @@ const char *fts_elasticsearch_plugin_version = DOVECOT_ABI_VERSION;
 struct fts_elasticsearch_user_module fts_elasticsearch_user_module =
     MODULE_CONTEXT_INIT(&mail_user_module_register);
 
-static int
-fts_elasticsearch_plugin_init_settings(struct mail_user *user,
-                  struct fts_elasticsearch_settings *set, const char *str)
+static int fts_elasticsearch_plugin_init_settings(struct mail_user *user,
+                                        struct fts_elasticsearch_settings *set,
+                                        const char *str)
 {
     const char *const *tmp;
 
-    if (str == NULL)
+    /* validate our parameters */
+    if (user == NULL || set == NULL) {
+        i_error("fts_elasticsearch: critical error initialisation");
+        return -1;
+    }
+
+    if (str == NULL) {
         str = "";
+    }
 
     for (tmp = t_strsplit_spaces(str, " "); *tmp != NULL; tmp++) {
         if (strncmp(*tmp, "url=", 4) == 0) {
@@ -33,29 +40,43 @@ fts_elasticsearch_plugin_init_settings(struct mail_user *user,
             return -1;
         }
     }
+
     return 0;
 }
 
-static void fts_elasticsearch_mail_user_create(struct mail_user *user, const char *env)
+static void fts_elasticsearch_mail_user_create(struct mail_user *user,
+                                               const char *env)
 {
     struct fts_elasticsearch_user *fuser;
 
-    fuser = p_new(user->pool, struct fts_elasticsearch_user, 1);
-    if (fts_elasticsearch_plugin_init_settings(user, &fuser->set, env) < 0) {
-        /* invalid settings, disabling */
-        return;
-    }
+    /* validate our parameters */
+    if (user == NULL || env == NULL) {
+        i_error("fts_elasticsearch: critical error during mail user creation");
+    } else {
+        fuser = p_new(user->pool, struct fts_elasticsearch_user, 1);
+        if (fts_elasticsearch_plugin_init_settings(user, &fuser->set, env) < 0) {
+            /* invalid settings, disabling */
+            return;
+        }
 
-    MODULE_CONTEXT_SET(user, fts_elasticsearch_user_module, fuser);
+        MODULE_CONTEXT_SET(user, fts_elasticsearch_user_module, fuser);
+    }
 }
 
 static void fts_elasticsearch_mail_user_created(struct mail_user *user)
 {
     const char *env;
 
-    env = mail_user_plugin_getenv(user, "fts_elasticsearch");
-    if (env != NULL)
-        fts_elasticsearch_mail_user_create(user, env);
+    /* validate our parameters */
+    if (user == NULL) {
+        i_error("fts_elasticsearch: critical error during mail user creation");
+    } else {
+        env = mail_user_plugin_getenv(user, "fts_elasticsearch");
+
+        if (env != NULL) {
+            fts_elasticsearch_mail_user_create(user, env);
+        }
+    }
 }
 
 static struct mail_storage_hooks fts_elasticsearch_mail_storage_hooks = {

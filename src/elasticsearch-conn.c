@@ -93,39 +93,58 @@ int elasticsearch_connection_init(const char *url, bool debug,
 
 void elasticsearch_connection_deinit(struct elasticsearch_connection *conn)
 {
-    i_free(conn->http_host);
-    i_free(conn->http_base_url);
-    i_free(conn);
+    if (conn != NULL) {
+        i_free(conn->http_host);
+        i_free(conn->http_base_url);
+        i_free(conn);
+    }
 }
 
 static void
 elasticsearch_connection_update_response(const struct http_response *response,
                                          struct elasticsearch_connection *conn)
 {
-    if (response->status / 100 != 2) {
-        i_error("fts_elasticsearch: Indexing failed: %s", response->reason);
-        conn->request_status = -1;
+    if (response != NULL && conn != NULL ) {
+        if (response->status / 100 != 2) {
+            i_error("fts_elasticsearch: Indexing failed: %s", response->reason);
+            conn->request_status = -1;
+        }
     }
 }
 
 int elasticsearch_connection_update(struct elasticsearch_connection *conn,
                                     const char *cmd)
 {
-    /* set-up the connection */
-    conn->post_type = ELASTICSEARCH_POST_TYPE_UPDATE;
+    if (conn != NULL ) {
+        /* set-up the connection */
+        conn->post_type = ELASTICSEARCH_POST_TYPE_UPDATE;
 
-    const char *url = t_strconcat(conn->http_base_url, "/_bulk/", NULL);
+        const char *url = t_strconcat(conn->http_base_url, "/_bulk/", NULL);
 
-    elasticsearch_connection_post(conn, url, cmd);
+        elasticsearch_connection_post(conn, url, cmd);
 
-    return conn->request_status;
+        return conn->request_status;
+    } else {
+        /* conn is NULL for some reason */
+        i_debug("fts_elasticsearch: connection_update: conn is NULL");
+
+        return -1;
+    }
 }
 
 int elasticsearch_connection_post(struct elasticsearch_connection *conn,
                                   const char *url, const char *cmd)
 {
-    struct http_client_request *http_req;
-    struct istream *post_payload;
+    struct http_client_request *http_req = NULL;
+    struct istream *post_payload = NULL;
+
+    if (conn == NULL || url == NULL || cmd == NULL) {
+        i_error("fts_elasticsearch: connection_post: critical error during POST");
+
+        return -1;
+    } else {
+        /* safe to continue */
+    }
 
     /* binds a callback object to elasticsearch_connection_http_response */
     http_req = elasticsearch_connection_http_request(conn, url);
@@ -144,8 +163,12 @@ int elasticsearch_connection_post(struct elasticsearch_connection *conn,
 void json_parse_array(json_object *jobj, char *key, struct elasticsearch_connection *conn)
 {
     enum json_type type;
+    json_object *jvalue = NULL, *jarray = NULL;;
+    int arraylen;
+    int i;
 
-    json_object *jarray = jobj; 
+    /* first array is our entry object */
+    *jarray = jobj; 
 
     if (key) {
 #if JSON_HAS_GET_EX
@@ -155,20 +178,20 @@ void json_parse_array(json_object *jobj, char *key, struct elasticsearch_connect
 #endif
     }
 
-    int arraylen = json_object_array_length(jarray);
-    int i;
-    json_object * jvalue;
+    arraylen = json_object_array_length(jarray);
 
+    /* iterate over the array and walk the tree */
     for (i = 0; i < arraylen; i++) {
         jvalue = json_object_array_get_idx(jarray, i);
         type = json_object_get_type(jvalue);
 
+        /* parse further down arrays */
         if (type == json_type_array) {
             json_parse_array(jvalue, NULL, conn);
         }
         else if (type != json_type_object) {
-        }
-        else {
+            /* nothing to do it if is not an object */
+        } else {
             json_parse(jvalue, conn);
         }
     }
@@ -179,9 +202,15 @@ elasticsearch_result_get(struct elasticsearch_connection *conn, const char *box_
 {
     struct elasticsearch_result * result;
     char *box_id_dup;
+
+    /* check if the mailbox is cached first */ 
     result = hash_table_lookup(conn->ctx->mailboxes, box_id);
-    if (result != NULL)
+
+    if (result != NULL) {
         return result;
+    } else {
+        /* mailbox is not cached, we have to query it and then cache it */
+    }
 
     box_id_dup = p_strdup(conn->ctx->result_pool, box_id);
     result = p_new(conn->ctx->result_pool, struct elasticsearch_result, 1);
@@ -198,43 +227,52 @@ elasticsearch_result_get(struct elasticsearch_connection *conn, const char *box_
 void elasticsearch_connection_last_uid_json(struct elasticsearch_connection *conn,
                                             char *key, struct json_object *val)
 {
-    if (strcmp(key, "uid") == 0) {
-        /* field is returned as an array */
-        json_object * jvalue = json_object_array_get_idx(val, 0);
-        conn->ctx->uid = json_object_get_int(jvalue);
+    if (conn != NULL && key != NULL && val != NULL) {
+        /* only interested in the uid field */
+        if (strcmp(key, "uid") == 0) {
+            /* field is returned as an array */
+            json_object * jvalue = json_object_array_get_idx(val, 0);
+            conn->ctx->uid = json_object_get_int(jvalue);
+        }
+    } else {
+        i_error("fts_elasticsearch: last_uid_json: critical error while getting last uid");
     }
 }
 
 void elasticsearch_connection_select_json(struct elasticsearch_connection *conn,
                                           char *key, struct json_object *val)
 {
-    if (strcmp(key, "uid") == 0) {
-        json_object * jvalue = json_object_array_get_idx(val, 0);
-        conn->ctx->uid = json_object_get_int(jvalue);
-    }
+    if (conn != NULL && key != NULL && val != NULL) {
+        if (strcmp(key, "uid") == 0) {
+            json_object * jvalue = json_object_array_get_idx(val, 0);
+            conn->ctx->uid = json_object_get_int(jvalue);
+        }
 
-    if (strcmp(key, "_score") == 0)
-        conn->ctx->score = json_object_get_double(val);  
+        if (strcmp(key, "_score") == 0)
+            conn->ctx->score = json_object_get_double(val);  
 
-    if (strcmp(key, "box") == 0) {
-        json_object * jvalue = json_object_array_get_idx(val, 0);
-        conn->ctx->box_guid = json_object_get_string(jvalue);
-    }
+        if (strcmp(key, "box") == 0) {
+            json_object * jvalue = json_object_array_get_idx(val, 0);
+            conn->ctx->box_guid = json_object_get_string(jvalue);
+        }
 
-    /* this is all we need for an e-mail result */
-    if (conn->ctx->uid != -1 && conn->ctx->score != -1 && conn->ctx->box_guid != NULL) {
-        struct elasticsearch_result * result = elasticsearch_result_get(conn, conn->ctx->box_guid);
-        struct fts_score_map *tmp_score = array_append_space(&result->scores);
+        /* this is all we need for an e-mail result */
+        if (conn->ctx->uid != -1 && conn->ctx->score != -1 && conn->ctx->box_guid != NULL) {
+            struct elasticsearch_result * result = elasticsearch_result_get(conn, conn->ctx->box_guid);
+            struct fts_score_map *tmp_score = array_append_space(&result->scores);
 
-        seq_range_array_add(&result->uids, conn->ctx->uid);
-        tmp_score->uid = conn->ctx->uid;
-        tmp_score->score = conn->ctx->score;
+            seq_range_array_add(&result->uids, conn->ctx->uid);
+            tmp_score->uid = conn->ctx->uid;
+            tmp_score->score = conn->ctx->score;
 
-        /* clean-up */
-        conn->ctx->uid = -1;
-        conn->ctx->score = -1;
-        conn->ctx->box_guid = NULL;
-        conn->ctx->results_found = TRUE;
+            /* clean-up */
+            conn->ctx->uid = -1;
+            conn->ctx->score = -1;
+            conn->ctx->box_guid = NULL;
+            conn->ctx->results_found = TRUE;
+        }
+    } else { /* conn != NULL && key != NULL && val != NULL */
+        i_error("fts_elasticsearch: select_json: critical error while processing result JSON");
     }
 }
 
@@ -292,13 +330,24 @@ void json_parse(json_object * jobj, struct elasticsearch_connection *conn)
 static int elasticsearch_json_parse(struct elasticsearch_connection *conn,
                                     string_t *data)
 {
-    json_object * jobj = json_tokener_parse(str_c(data));
+    json_object * jobj;
+
+    if (data == NULL) {
+        i_error("fts_elasticsearch: json_parse: empty JSON result");
+
+        return -1;
+    } else {
+        /* attempt to tokenise the JSON */
+        jobj = json_tokener_parse(str_c(data));
+    }
 
     if (jobj == NULL) {
         i_error("fts-elasticsearch: parsing of JSON reply failed, likely >1Mb result");
+
         return -1;
     }
 
+    /* finish parsing it */
     json_parse(jobj, conn);
 
     return 0;
@@ -340,7 +389,15 @@ uint32_t elasticsearch_connection_last_uid(struct elasticsearch_connection *conn
                                            const char *query, const char *box_guid)
 {
     struct elasticsearch_lookup_context lookup_context;
-    const char *url;
+    const char *url = NULL;
+
+    if (conn == NULL || query == NULL || box_guid == NULL) {
+        i_error("fts_elasticsearch: last_uid: critical error while fetching last UID");
+
+        return -1;
+    } else {
+        /* safe to continue */
+    }
 
     /* set-up the context */
     memset(&lookup_context, 0, sizeof(lookup_context));
@@ -395,17 +452,19 @@ static void
 elasticsearch_connection_http_response(const struct http_response *response,
                                        struct elasticsearch_connection *conn)
 {
-    switch (conn->post_type) {
-    case ELASTICSEARCH_POST_TYPE_LAST_UID: /* fall through */
-    case ELASTICSEARCH_POST_TYPE_SELECT:
-        elasticsearch_connection_select_response(response, conn);
-        break;
-    case ELASTICSEARCH_POST_TYPE_UPDATE:
-        elasticsearch_connection_update_response(response, conn);
-        break;
-    case ELASTICSEARCH_POST_TYPE_REFRESH:
-        /* not implemented */
-        break;
+    if (response != NULL && conn != NULL) {
+        switch (conn->post_type) {
+        case ELASTICSEARCH_POST_TYPE_LAST_UID: /* fall through */
+        case ELASTICSEARCH_POST_TYPE_SELECT:
+            elasticsearch_connection_select_response(response, conn);
+            break;
+        case ELASTICSEARCH_POST_TYPE_UPDATE:
+            elasticsearch_connection_update_response(response, conn);
+            break;
+        case ELASTICSEARCH_POST_TYPE_REFRESH:
+            /* not implemented */
+            break;
+        }
     }
 }
 
@@ -413,21 +472,33 @@ struct http_client_request*
 elasticsearch_connection_http_request(struct elasticsearch_connection *conn,
                                       const char *url)
 {
-    struct http_client_request *http_req;    
+    struct http_client_request *http_req = NULL;
 
-    http_req = http_client_request(elasticsearch_http_client, "POST",
-                       conn->http_host, url,
-                       elasticsearch_connection_http_response, conn);
-    http_client_request_set_port(http_req, conn->http_port);
-    http_client_request_set_ssl(http_req, conn->http_ssl);
-    http_client_request_add_header(http_req, "Content-Type", "text/json");
+    if (conn != NULL && url != NULL) {
+        http_req = http_client_request(elasticsearch_http_client, "POST",
+                                       conn->http_host, url,
+                                       elasticsearch_connection_http_response,
+                                       conn);
+        http_client_request_set_port(http_req, conn->http_port);
+        http_client_request_set_ssl(http_req, conn->http_ssl);
+        http_client_request_add_header(http_req, "Content-Type", "text/json");
+    }
 
     return http_req;
 }
 
 int elasticsearch_connection_refresh(struct elasticsearch_connection *conn)
 {
-    const char *url;
+    const char *url = NULL;
+
+    /* validate input */
+    if (conn == NULL) {
+        i_error("fts_elasticsearch: refresh: critical error");
+
+        return -1;
+    } else {
+        /* safe to continue */
+    }
 
     /* set-up the context */
     conn->post_type = ELASTICSEARCH_POST_TYPE_REFRESH;
@@ -439,8 +510,9 @@ int elasticsearch_connection_refresh(struct elasticsearch_connection *conn)
     /* perform the actual POST */
     elasticsearch_connection_post(conn, url, "");
 
-    if (conn->request_status < 0) 
+    if (conn->request_status < 0) {
         return -1;
+    }
 
     return 0;
 }
@@ -450,7 +522,16 @@ int elasticsearch_connection_select(struct elasticsearch_connection *conn, pool_
                                     struct elasticsearch_result ***box_results_r)
 {
     struct elasticsearch_lookup_context lookup_context;
-    const char *url;
+    const char *url = NULL;
+
+    /* validate our input */
+    if (conn == NULL || query == NULL || box_guid == NULL || box_results_r == NULL) {
+        i_error("fts_elasticsearch: select: critical error during select");
+
+        return -1;
+    } else {
+        /* safe to continue */
+    }
 
     /* set-up the context */
     memset(&lookup_context, 0, sizeof(lookup_context));
@@ -472,8 +553,10 @@ int elasticsearch_connection_select(struct elasticsearch_connection *conn, pool_
     /* perform the actual POST */
     elasticsearch_connection_post(conn, url, query);
 
-    if (conn->request_status < 0) 
+    if (conn->request_status < 0) {
+        /* no further processing required */
         return -1;
+    }
 
     /* build our results to push back to the fts api */
     array_append_zero(&conn->ctx->results);
