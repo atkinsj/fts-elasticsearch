@@ -15,6 +15,7 @@
 #include <syslog.h>
 #include <unistd.h>
 #include <inttypes.h>
+#include <limits.h>
 #include <json-c/json.h>
 
 #define ELASTICSEARCH_BULK_SIZE 15000000 /* 15 megabytes */
@@ -454,31 +455,6 @@ static int fts_backend_elasticsearch_optimize(struct fts_backend *backend ATTR_U
     return 0;
 }
 
-static const char *elasticsearch_escape_query_string(const char *str)
-{
-    const char *escape_chars = "+-&&||!(){}[]^\"~?:\\/";
-    const char *p = str;
-
-    string_t *ret;
-
-    ret = t_str_new((size_t) (p - str) + 128);
-    str_append_n(ret, str, (size_t) (p - str));
-
-    /* TODO: What is the expected IMAP SEARCH behaviour? Is everything a partial match? */
-    str_append(ret, "*");
-    
-    for (p = str; *p != '\0'; p++) {
-        if (strchr(escape_chars, *p) != NULL)
-            str_append_c(ret, '\\\\');
-
-        str_append_c(ret, *p);
-    }
-
-    str_append(ret, "*");
-
-    return str_c(ret);
-}
-
 static bool
 elasticsearch_add_definite_query(struct mail_search_arg *arg, json_object *value,
                                  json_object *fields)
@@ -516,9 +492,7 @@ elasticsearch_add_definite_query(struct mail_search_arg *arg, json_object *value
         i_debug("fts-elasticsearch: arg->match_not is true");
 
     /* we always want to add a query value */
-    const char *cleaned = elasticsearch_escape_query_string(arg->value.str);
-
-    json_object_object_add(value, "query", json_object_new_string(cleaned));
+    json_object_object_add(value, "query", json_object_new_string(arg->value.str));
 
     return TRUE;
 }
@@ -576,10 +550,19 @@ fts_backend_elasticsearch_lookup(struct fts_backend *_backend, struct mailbox *b
     json_object *fields = json_object_new_array();
     json_object *value = json_object_new_object();
 
+    /* build the query */
     valid = elasticsearch_add_definite_query_args(fields, value, args);
 
+    /* if no fields were added, add _all */
+    if (json_object_array_length(fields) == 0) {
+        json_object_array_add(fields, json_object_new_string("_all"));
+    }
+
+    /* default operator set to AND.
+     * TODO: IMAP can specify this right? */
+    json_object_object_add(value, "operator", json_object_new_string("and"));
     json_object_object_add(value, "fields", fields);
-    json_object_object_add(term, "query_string", value);
+    json_object_object_add(term, "multi_match", value);
 
     if (!valid)
         return -1;
@@ -593,6 +576,8 @@ fts_backend_elasticsearch_lookup(struct fts_backend *_backend, struct mailbox *b
     json_object_array_add(fields_root, json_object_new_string("uid"));
     json_object_array_add(fields_root, json_object_new_string("box"));
     json_object_object_add(query, "fields", fields_root);
+    json_object_object_add(query, "size", json_object_new_int(INT_MAX));
+    
 
     ret = elasticsearch_connection_select(backend->elasticsearch_conn, pool,
         json_object_to_json_string(query), box_guid, &es_results);
