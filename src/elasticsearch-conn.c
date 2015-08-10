@@ -168,7 +168,7 @@ void json_parse_array(json_object *jobj, char *key, struct elasticsearch_connect
     int i;
 
     /* first array is our entry object */
-    *jarray = jobj; 
+    jarray = jobj; 
 
     if (key) {
 #if JSON_HAS_GET_EX
