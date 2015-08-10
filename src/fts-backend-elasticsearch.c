@@ -534,6 +534,7 @@ fts_backend_elasticsearch_lookup(struct fts_backend *_backend, struct mailbox *b
     struct mailbox_status status;
     const char *box_guid;
     bool valid = FALSE;
+    bool and_args = (flags & FTS_LOOKUP_FLAG_AND_ARGS) != 0;
     int ret = -1;
 
     pool_t pool = pool_alloconly_create("fts elasticsearch search", 1024);
@@ -553,19 +554,26 @@ fts_backend_elasticsearch_lookup(struct fts_backend *_backend, struct mailbox *b
     /* build the query */
     valid = elasticsearch_add_definite_query_args(fields, value, args);
 
-    /* if no fields were added, add _all */
+    /* return early if it failed for some reason */
+    if (!valid) {
+        return -1;
+    }
+
+    /* if no fields were added, add _all as our only field */
     if (json_object_array_length(fields) == 0) {
         json_object_array_add(fields, json_object_new_string("_all"));
     }
 
-    /* default operator set to AND.
-     * TODO: IMAP can specify this right? */
-    json_object_object_add(value, "operator", json_object_new_string("and"));
+    /* determine if we should AND or OR */
+    if (and_args) {
+        json_object_object_add(value, "operator", json_object_new_string("and"));
+    }
+    else {
+        json_object_object_add(value, "operator", json_object_new_string("or"));
+    }
+    
     json_object_object_add(value, "fields", fields);
     json_object_object_add(term, "multi_match", value);
-
-    if (!valid)
-        return -1;
 
     /* wrap it in the ES 'query' field */
     json_object *query = json_object_new_object();
@@ -603,11 +611,6 @@ fts_backend_elasticsearch_lookup(struct fts_backend *_backend, struct mailbox *b
     return ret;
 }
 
-static void fts_backend_elasticsearch_lookup_done(struct fts_backend *_backend)
-{
-    /* may as well call refresh; it is run anytime a lookup completes anyway. */
-    fts_backend_elasticsearch_refresh(_backend);
-}
 
 struct fts_backend fts_backend_elasticsearch = {
     .name = "elasticsearch",
@@ -630,7 +633,6 @@ struct fts_backend fts_backend_elasticsearch = {
         fts_backend_elasticsearch_optimize,
         fts_backend_default_can_lookup,
         fts_backend_elasticsearch_lookup,
-        fts_backend_elasticsearch_lookup_done,
         NULL
     }
 };
