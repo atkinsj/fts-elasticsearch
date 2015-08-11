@@ -47,7 +47,7 @@ static int fts_elasticsearch_plugin_init_settings(struct mail_user *user,
 static void fts_elasticsearch_mail_user_create(struct mail_user *user,
                                                const char *env)
 {
-    struct fts_elasticsearch_user *fuser;
+    struct fts_elasticsearch_user *fuser = NULL;
 
     /* validate our parameters */
     if (user == NULL || env == NULL) {
@@ -65,7 +65,7 @@ static void fts_elasticsearch_mail_user_create(struct mail_user *user,
 
 static void fts_elasticsearch_mail_user_created(struct mail_user *user)
 {
-    const char *env;
+    const char *env = NULL;
 
     /* validate our parameters */
     if (user == NULL) {

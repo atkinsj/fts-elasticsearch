@@ -29,7 +29,7 @@ struct elasticsearch_fts_backend_update_context {
     struct fts_backend_update_context ctx;
 
     struct mailbox *prev_box;
-    char box_guid[MAILBOX_GUID_HEX_LENGTH+1];
+    char box_guid[MAILBOX_GUID_HEX_LENGTH + 1];
     
     uint32_t prev_uid;
 
@@ -133,10 +133,12 @@ fts_backend_elasticsearch_get_last_uid(struct fts_backend *_backend,
                                        struct mailbox *box,
                                        uint32_t *last_uid_r)
 {
-    struct elasticsearch_fts_backend *backend = NULL;
     struct fts_index_header hdr;
-    const char* box_guid;
-    int ret;
+    struct elasticsearch_fts_backend *backend = NULL;
+    const char *box_guid = NULL;
+    json_object *root = NULL, *sort_root = NULL;
+    json_object *query_root = NULL, *fields_root = NULL;
+    int32_t ret;
 
     /* ensure our backend has been initialised */
     if (_backend == NULL || box == NULL || last_uid_r == NULL) {
@@ -173,10 +175,10 @@ fts_backend_elasticsearch_get_last_uid(struct fts_backend *_backend,
     }
 
     /* build a JSON object to query the last uid */
-    json_object *root = json_object_new_object();
-    json_object *sort_root = json_object_new_object();
-    json_object *query_root = json_object_new_object();
-    json_object *fields_root = json_object_new_array();
+    root = json_object_new_object();
+    sort_root = json_object_new_object();
+    query_root = json_object_new_object();
+    fields_root = json_object_new_array();
 
     json_object_object_add(sort_root, "uid", json_object_new_string("desc"));
     json_object_object_add(query_root, "match_all", json_object_new_object());
@@ -315,28 +317,30 @@ fts_backend_elasticsearch_doc_open(struct elasticsearch_fts_backend_update_conte
 {
     struct elasticsearch_fts_backend_update_context *ctx =
         (struct elasticsearch_fts_backend_update_context *)_ctx;
+    json_object *temp = NULL, *action = NULL, *jint = NULL, *jstring = NULL;
 
+    /* track that we've added documents */
     ctx->documents_added = TRUE;
 
     /* TODO: this json-c code must leak like crazy? i'm not sure how it handles
      * reference counts. */
 
-    json_object *temp = json_object_new_object();
+    temp = json_object_new_object();
 
     json_object_object_add(temp, "_index", json_object_new_string(ctx->box_guid));
     json_object_object_add(temp, "_type", json_object_new_string("mail"));
     json_object_object_add(temp, "_id", json_object_new_int(uid));
 
-    json_object *action = json_object_new_object();
+    action = json_object_new_object();
     json_object_object_add(action, action_name, temp);
 
     str_append(json_request, json_object_to_json_string(action));
     str_append(json_request, "\n");
 
-    json_object *jint = json_object_new_int(uid);
+    jint = json_object_new_int(uid);
     json_object_object_add(message, "uid", jint);
 
-    json_object *  jstring = json_object_new_string(ctx->box_guid);
+    jstring = json_object_new_string(ctx->box_guid);
     json_object_object_add(message, "box", jstring);
 
     /* clean-up */
@@ -349,6 +353,8 @@ fts_backend_elasticsearch_uid_changed(struct fts_backend_update_context *_ctx,
 {
     struct elasticsearch_fts_backend_update_context *ctx =
         (struct elasticsearch_fts_backend_update_context *)_ctx;
+    struct elasticsearch_fts_backend *backend =
+            (struct elasticsearch_fts_backend *)_ctx->backend;
 
     if (!ctx->documents_added) {
         i_assert(ctx->prev_uid == 0);
@@ -365,9 +371,6 @@ fts_backend_elasticsearch_uid_changed(struct fts_backend_update_context *_ctx,
 
     /* chunk up our requests in to reasonable sizes */
     if (ctx->request_size > ELASTICSEARCH_BULK_SIZE) {        
-        struct elasticsearch_fts_backend *backend =
-            (struct elasticsearch_fts_backend *)_ctx->backend;
-
         /* do an early post */
         elasticsearch_connection_update(backend->elasticsearch_conn,
                                         str_c(ctx->json_request));
@@ -425,31 +428,42 @@ static int
 fts_backend_elasticsearch_update_build_more(struct fts_backend_update_context *_ctx,
                                       const unsigned char *data, size_t size)
 {
-    struct elasticsearch_fts_backend_update_context *ctx =
-        (struct elasticsearch_fts_backend_update_context *)_ctx;
-    
-    str_append_n(ctx->temp, data, size);
+    struct elasticsearch_fts_backend_update_context *ctx;
 
-    /* keep track of the total request size for chunking */
-    ctx->request_size += size;
+    if (_ctx != NULL) {
+        ctx = (struct elasticsearch_fts_backend_update_context *)_ctx;
 
-    return 0;
+        /* build more message body */
+        str_append_n(ctx->temp, data, size);
+
+        /* keep track of the total request size for chunking */
+        ctx->request_size += size;
+
+        return 0;
+    } else {
+        i_error("fts_elasticsearch: update_build_more: critical error building message body");
+
+        return -1;
+    }
 }
 
 static void
 fts_backend_elasticsearch_update_unset_build_key(struct fts_backend_update_context *_ctx)
 {
-    struct elasticsearch_fts_backend_update_context *ctx =
-        (struct elasticsearch_fts_backend_update_context *)_ctx;
+    struct elasticsearch_fts_backend_update_context *ctx = NULL;
+    json_object *jstring = NULL;
 
-    /* field is complete, add it to our message. */
-    json_object *jstring = json_object_new_string(str_c(ctx->temp));
-    json_object_object_add(ctx->message, str_c(ctx->current_field), jstring);
+    if (_ctx != NULL) {
+        ctx = (struct elasticsearch_fts_backend_update_context *)_ctx;
 
-    str_truncate(ctx->temp, 0);
-    str_truncate(ctx->current_field, 0);
+        /* field is complete, add it to our message. */
+        jstring = json_object_new_string(str_c(ctx->temp));
+        json_object_object_add(ctx->message, str_c(ctx->current_field), jstring);
 
-    return;
+        /* clean-up our temp */
+        str_truncate(ctx->temp, 0);
+        str_truncate(ctx->current_field, 0);
+    }
 }
 
 static void
@@ -458,6 +472,7 @@ fts_backend_elasticsearch_update_expunge(struct fts_backend_update_context *_ctx
 {
     struct elasticsearch_fts_backend_update_context *ctx =
         (struct elasticsearch_fts_backend_update_context *)_ctx;
+    json_object *message = NULL;
 
     ctx->expunges = TRUE;
 
@@ -468,7 +483,7 @@ fts_backend_elasticsearch_update_expunge(struct fts_backend_update_context *_ctx
         /* ctx->expunge_json_request was allocated in an earlier call */
     }
 
-    json_object *message = json_object_new_object();
+    message = json_object_new_object();
 
     /* we don't need a corresponding doc_close call, the bulk delete API is shorter */
     fts_backend_elasticsearch_doc_open(ctx, uid, ctx->expunge_json_request,
@@ -596,7 +611,7 @@ fts_backend_elasticsearch_lookup(struct fts_backend *_backend, struct mailbox *b
     bool valid = FALSE;
     bool and_args = (flags & FTS_LOOKUP_FLAG_AND_ARGS) != 0;
     pool_t pool;
-    int ret = -1;
+    int32_t ret = -1;
 
     /* validate our input */
     if (_backend == NULL || box == NULL || args == NULL || result == NULL)

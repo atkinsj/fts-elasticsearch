@@ -19,14 +19,24 @@ struct http_client *elasticsearch_http_client = NULL;
 
 struct elasticsearch_lookup_context {
     pool_t result_pool;
-    HASH_TABLE(char *, struct elasticsearch_result *) mailboxes;
-    ARRAY(struct elasticsearch_result *) results;
-    int uid;
-    float score;
-    const char *box_guid;
-    bool results_found;
 
+    /* results per mailbox */
+    HASH_TABLE(char *, struct elasticsearch_result *) mailboxes;
+
+    /* temporary results */
+    ARRAY(struct elasticsearch_result *) results;
+
+    /* current mailbox */
+    const char *box_guid;
+
+    /* current message */
+    int32_t uid;
+    float score;
+
+    /* current email as a string */
     string_t *email;
+    
+    bool results_found;
 };
 
 struct elasticsearch_connection {
@@ -35,8 +45,7 @@ struct elasticsearch_connection {
     in_port_t http_port;
     char *http_base_url;
     char *http_failure;
-
-    int request_status;
+    int32_t request_status;
 
     /* for streaming processing of results */
     struct istream *payload;
@@ -51,9 +60,9 @@ struct elasticsearch_connection {
     unsigned int http_ssl:1;
 };
 
-int elasticsearch_connection_init(const char *url, bool debug,
-                                  struct elasticsearch_connection **conn_r,
-                                  const char **error_r)
+int32_t elasticsearch_connection_init(const char *url, bool debug,
+                                      struct elasticsearch_connection **conn_r,
+                                      const char **error_r)
 {
     struct http_client_settings http_set;
     struct elasticsearch_connection *conn = NULL;
@@ -122,8 +131,8 @@ elasticsearch_connection_update_response(const struct http_response *response,
     }
 }
 
-int elasticsearch_connection_update(struct elasticsearch_connection *conn,
-                                    const char *cmd)
+int32_t elasticsearch_connection_update(struct elasticsearch_connection *conn,
+                                        const char *cmd)
 {
     const char *url = NULL;
 
@@ -144,8 +153,8 @@ int elasticsearch_connection_update(struct elasticsearch_connection *conn,
     }
 }
 
-int elasticsearch_connection_post(struct elasticsearch_connection *conn,
-                                  const char *url, const char *cmd)
+int32_t elasticsearch_connection_post(struct elasticsearch_connection *conn,
+                                      const char *url, const char *cmd)
 {
     struct http_client_request *http_req = NULL;
     struct istream *post_payload = NULL;
@@ -176,8 +185,8 @@ void json_parse_array(json_object *jobj, char *key, struct elasticsearch_connect
 {
     enum json_type type;
     json_object *jvalue = NULL, *jarray = NULL;;
-    int arraylen;
-    int i;
+    size_t arraylen;
+    size_t i;
 
     /* first array is our entry object */
     jarray = jobj; 
@@ -212,8 +221,8 @@ void json_parse_array(json_object *jobj, char *key, struct elasticsearch_connect
 static struct elasticsearch_result *
 elasticsearch_result_get(struct elasticsearch_connection *conn, const char *box_id)
 {
-    struct elasticsearch_result * result;
-    char *box_id_dup;
+    struct elasticsearch_result *result = NULL;
+    char *box_id_dup = NULL;
 
     /* check if the mailbox is cached first */ 
     result = hash_table_lookup(conn->ctx->mailboxes, box_id);
@@ -288,7 +297,7 @@ void elasticsearch_connection_select_json(struct elasticsearch_connection *conn,
     }
 }
 
-void json_parse(json_object * jobj, struct elasticsearch_connection *conn)
+void json_parse(json_object *jobj, struct elasticsearch_connection *conn)
 {
     enum json_type type;
 
@@ -342,7 +351,7 @@ void json_parse(json_object * jobj, struct elasticsearch_connection *conn)
 static int elasticsearch_json_parse(struct elasticsearch_connection *conn,
                                     string_t *data)
 {
-    json_object * jobj;
+    json_object *jobj = NULL;
 
     if (data == NULL) {
         i_error("fts_elasticsearch: json_parse: empty JSON result");
@@ -367,9 +376,9 @@ static int elasticsearch_json_parse(struct elasticsearch_connection *conn,
 
 static void elasticsearch_connection_payload_input(struct elasticsearch_connection *conn)
 {
-    const unsigned char *data;
+    const unsigned char *data = NULL;
     size_t size;
-    int ret;
+    int32_t ret = -1;
 
     while ((ret = i_stream_read_data(conn->payload, &data, &size, 0)) > 0) {
         /* TODO: there has to be a better way to do this. How do we process JSON in chunks? 
@@ -397,7 +406,7 @@ static void elasticsearch_connection_payload_input(struct elasticsearch_connecti
     }
 }
 
-uint32_t elasticsearch_connection_last_uid(struct elasticsearch_connection *conn,
+int32_t elasticsearch_connection_last_uid(struct elasticsearch_connection *conn,
                                            const char *query, const char *box_guid)
 {
     struct elasticsearch_lookup_context lookup_context;
@@ -499,7 +508,7 @@ elasticsearch_connection_http_request(struct elasticsearch_connection *conn,
     return http_req;
 }
 
-int elasticsearch_connection_refresh(struct elasticsearch_connection *conn)
+int32_t elasticsearch_connection_refresh(struct elasticsearch_connection *conn)
 {
     const char *url = NULL;
 
@@ -529,9 +538,10 @@ int elasticsearch_connection_refresh(struct elasticsearch_connection *conn)
     return 0;
 }
 
-int elasticsearch_connection_select(struct elasticsearch_connection *conn, pool_t pool,
-                                    const char *query, const char *box_guid,
-                                    struct elasticsearch_result ***box_results_r)
+int32_t elasticsearch_connection_select(struct elasticsearch_connection *conn,
+                                        pool_t pool, const char *query,
+                                        const char *box_guid,
+                                        struct elasticsearch_result ***box_results_r)
 {
     struct elasticsearch_lookup_context lookup_context;
     const char *url = NULL;
