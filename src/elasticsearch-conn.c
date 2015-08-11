@@ -70,7 +70,7 @@ int32_t elasticsearch_connection_init(const char *url, bool debug,
     const char *error = NULL;
 
     if (error_r == NULL || url == NULL || conn_r == NULL) {
-        i_debug("fts_elasticsearch: error initialising ElasticSearch connection"
+        i_debug("fts_elasticsearch: error initialising ElasticSearch connection");
         return -1;
     } else {
         /* safe to continue */

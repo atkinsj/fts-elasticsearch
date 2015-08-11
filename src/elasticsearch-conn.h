@@ -48,7 +48,7 @@ void elasticsearch_connection_select_json(struct elasticsearch_connection *conn,
 void json_parse(json_object * jobj, struct elasticsearch_connection *conn);
 
 
-uint32_t elasticsearch_connection_last_uid(struct elasticsearch_connection *conn,
+int32_t elasticsearch_connection_last_uid(struct elasticsearch_connection *conn,
                                            const char *query, const char *box_guid);
 
 struct http_client_request*
