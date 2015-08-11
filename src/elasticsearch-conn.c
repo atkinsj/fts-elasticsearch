@@ -263,18 +263,23 @@ void elasticsearch_connection_last_uid_json(struct elasticsearch_connection *con
 void elasticsearch_connection_select_json(struct elasticsearch_connection *conn,
                                           char *key, struct json_object *val)
 {
-    if (conn != NULL && key != NULL && val != NULL) {
-        if (strcmp(key, "uid") == 0) {
-            json_object * jvalue = json_object_array_get_idx(val, 0);
-            conn->ctx->uid = json_object_get_int(jvalue);
-        }
+    json_object *jvalue;
 
-        if (strcmp(key, "_score") == 0)
-            conn->ctx->score = json_object_get_double(val);  
+    if (conn != NULL) {
+        /* ensure a key and val exist before trying to process them */
+        if (key != NULL && val != NULL) {
+            if (strcmp(key, "uid") == 0) {
+                jvalue = json_object_array_get_idx(val, 0);
+                conn->ctx->uid = json_object_get_int(jvalue);
+            }
 
-        if (strcmp(key, "box") == 0) {
-            json_object * jvalue = json_object_array_get_idx(val, 0);
-            conn->ctx->box_guid = json_object_get_string(jvalue);
+            if (strcmp(key, "_score") == 0)
+                conn->ctx->score = json_object_get_double(val);  
+
+            if (strcmp(key, "box") == 0) {
+                json_object * jvalue = json_object_array_get_idx(val, 0);
+                conn->ctx->box_guid = json_object_get_string(jvalue);
+            }
         }
 
         /* this is all we need for an e-mail result */
