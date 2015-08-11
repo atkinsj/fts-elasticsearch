@@ -590,7 +590,7 @@ fts_backend_elasticsearch_lookup(struct fts_backend *_backend, struct mailbox *b
     struct elasticsearch_fts_backend *backend = NULL;
     struct elasticsearch_result **es_results = NULL;
     struct mailbox_status status;
-    json_object *term = NULL, *fields = NULL, *value = NULL
+    json_object *term = NULL, *fields = NULL, *value = NULL;
     json_object *query = NULL, *fields_root = NULL;
     const char *box_guid = NULL;
     bool valid = FALSE;
@@ -651,11 +651,11 @@ fts_backend_elasticsearch_lookup(struct fts_backend *_backend, struct mailbox *b
     json_object_object_add(term, "multi_match", value);
 
     /* wrap it in the ES 'query' field */
-    json_object *query = json_object_new_object();
+    query = json_object_new_object();
     json_object_object_add(query, "query", term);
 
     /* only return the UID field */
-    json_object *fields_root = json_object_new_array();
+    fields_root = json_object_new_array();
     json_object_array_add(fields_root, json_object_new_string("uid"));
     json_object_array_add(fields_root, json_object_new_string("box"));
     json_object_object_add(query, "fields", fields_root);
