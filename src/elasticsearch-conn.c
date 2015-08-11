@@ -30,6 +30,7 @@ struct elasticsearch_lookup_context {
 };
 
 struct elasticsearch_connection {
+    /* ElasticSearch HTTP API information */
     char *http_host;
     in_port_t http_port;
     char *http_base_url;
@@ -37,17 +38,16 @@ struct elasticsearch_connection {
 
     int request_status;
 
+    /* for streaming processing of results */
     struct istream *payload;
     struct io *io;
 
     enum elasticsearch_post_type post_type;
 
-    /* TODO: should probably move this out to a lookup context struct */
+    /* context for the current lookup */
     struct elasticsearch_lookup_context *ctx;
 
     unsigned int debug:1;
-    unsigned int posting:1;
-    unsigned int xml_failed:1;
     unsigned int http_ssl:1;
 };
 
@@ -56,10 +56,18 @@ int elasticsearch_connection_init(const char *url, bool debug,
                                   const char **error_r)
 {
     struct http_client_settings http_set;
-    struct elasticsearch_connection *conn;
-    struct http_url *http_url;
-    const char *error;
+    struct elasticsearch_connection *conn = NULL;
+    struct http_url *http_url = NULL;
+    const char *error = NULL;
 
+    if (error_r == NULL || url == NULL || conn_r == NULL) {
+        i_debug("fts_elasticsearch: error initialising ElasticSearch connection"
+        return -1;
+    } else {
+        /* safe to continue */
+    }
+
+    /* validate the url */
     if (http_url_parse(url, NULL, 0, pool_datastack_create(),
                &http_url, &error) < 0) {
         *error_r = t_strdup_printf(
@@ -75,6 +83,7 @@ int elasticsearch_connection_init(const char *url, bool debug,
     conn->http_ssl = http_url->have_ssl;
     conn->debug = debug;
 
+    /* guard against init being called multiple times */
     if (elasticsearch_http_client == NULL) {
         memset(&http_set, 0, sizeof(http_set));
         http_set.max_idle_time_msecs = 5 * 1000;
@@ -105,6 +114,7 @@ elasticsearch_connection_update_response(const struct http_response *response,
                                          struct elasticsearch_connection *conn)
 {
     if (response != NULL && conn != NULL ) {
+        /* 200 OK, 204 continue */
         if (response->status / 100 != 2) {
             i_error("fts_elasticsearch: Indexing failed: %s", response->reason);
             conn->request_status = -1;
@@ -115,11 +125,13 @@ elasticsearch_connection_update_response(const struct http_response *response,
 int elasticsearch_connection_update(struct elasticsearch_connection *conn,
                                     const char *cmd)
 {
-    if (conn != NULL ) {
+    const char *url = NULL;
+
+    if (conn != NULL && cmd != NULL) {
         /* set-up the connection */
         conn->post_type = ELASTICSEARCH_POST_TYPE_UPDATE;
 
-        const char *url = t_strconcat(conn->http_base_url, "/_bulk/", NULL);
+        url = t_strconcat(conn->http_base_url, "/_bulk/", NULL);
 
         elasticsearch_connection_post(conn, url, cmd);
 
