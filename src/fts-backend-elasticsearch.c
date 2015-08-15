@@ -359,6 +359,8 @@ fts_backend_elasticsearch_uid_changed(struct fts_backend_update_context *_ctx,
     if (!ctx->documents_added) {
         i_assert(ctx->prev_uid == 0);
 
+        /* allocate strings for building messages and multi-part messages
+         * with a sensible initial size. */
         ctx->current_field = str_new(default_pool, 1024 * 64);
         ctx->temp = str_new(default_pool, 1024 * 64);
         ctx->json_request = str_new(default_pool, 1024 * 64);
@@ -474,6 +476,7 @@ fts_backend_elasticsearch_update_expunge(struct fts_backend_update_context *_ctx
         (struct elasticsearch_fts_backend_update_context *)_ctx;
     json_object *message = NULL;
 
+    /* update the context to note that there have been expunges */
     ctx->expunges = TRUE;
 
     /* set-up our json request */

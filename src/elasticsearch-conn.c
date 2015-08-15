@@ -248,11 +248,13 @@ elasticsearch_result_get(struct elasticsearch_connection *conn, const char *box_
 void elasticsearch_connection_last_uid_json(struct elasticsearch_connection *conn,
                                             char *key, struct json_object *val)
 {
+    json_object *jvalue = NULL;
+
     if (conn != NULL && key != NULL && val != NULL) {
         /* only interested in the uid field */
         if (strcmp(key, "uid") == 0) {
             /* field is returned as an array */
-            json_object * jvalue = json_object_array_get_idx(val, 0);
+            jvalue = json_object_array_get_idx(val, 0);
             conn->ctx->uid = json_object_get_int(jvalue);
         }
     } else {
@@ -264,6 +266,8 @@ void elasticsearch_connection_select_json(struct elasticsearch_connection *conn,
                                           char *key, struct json_object *val)
 {
     json_object *jvalue;
+    struct elasticsearch_result *result = NULL;
+    struct fts_score_map *tmp_score = NULL;
 
     if (conn != NULL) {
         /* ensure a key and val exist before trying to process them */
@@ -277,15 +281,15 @@ void elasticsearch_connection_select_json(struct elasticsearch_connection *conn,
                 conn->ctx->score = json_object_get_double(val);  
 
             if (strcmp(key, "box") == 0) {
-                json_object * jvalue = json_object_array_get_idx(val, 0);
+                jvalue = json_object_array_get_idx(val, 0);
                 conn->ctx->box_guid = json_object_get_string(jvalue);
             }
         }
 
         /* this is all we need for an e-mail result */
         if (conn->ctx->uid != -1 && conn->ctx->score != -1 && conn->ctx->box_guid != NULL) {
-            struct elasticsearch_result * result = elasticsearch_result_get(conn, conn->ctx->box_guid);
-            struct fts_score_map *tmp_score = array_append_space(&result->scores);
+            result = elasticsearch_result_get(conn, conn->ctx->box_guid);
+            tmp_score = array_append_space(&result->scores);
 
             seq_range_array_add(&result->uids, conn->ctx->uid);
             tmp_score->uid = conn->ctx->uid;
@@ -305,9 +309,12 @@ void elasticsearch_connection_select_json(struct elasticsearch_connection *conn,
 void json_parse(json_object *jobj, struct elasticsearch_connection *conn)
 {
     enum json_type type;
+    json_object *temp = NULL;
 
     json_object_object_foreach(jobj, key, val) {
-        json_object * temp;
+        /* reinitialise to temp each iteration */
+        temp = NULL;
+
         type = json_object_get_type(val);
 
         /* the output of the json_parse varies per post type */
@@ -466,7 +473,7 @@ elasticsearch_connection_select_response(const struct http_response *response,
     }
 
     /* TODO: read up in the dovecot source to see how we should clean these up
-     * as they are cuasing I/O leaks. */
+     * as they are causing I/O leaks. */
     i_stream_ref(response->payload);
     conn->payload = response->payload;
     conn->ctx->email = str_new(default_pool, 1000000);
