@@ -360,7 +360,7 @@ void json_parse(json_object *jobj, struct elasticsearch_connection *conn)
     }
 } 
 
-static int elasticsearch_json_parse(struct elasticsearch_connection *conn,
+static int32_t elasticsearch_json_parse(struct elasticsearch_connection *conn,
                                     string_t *data)
 {
     json_object *jobj = NULL;
@@ -375,6 +375,8 @@ static int elasticsearch_json_parse(struct elasticsearch_connection *conn,
     }
 
     if (jobj == NULL) {
+        /* TODO: is this because ES only returns partial JSON and chunks it and
+         * we just aren't handling the HTTP chunking, or is it JSON chunking. */
         i_error("fts-elasticsearch: parsing of JSON reply failed, likely >1Mb result");
 
         return -1;
@@ -392,9 +394,8 @@ static void elasticsearch_connection_payload_input(struct elasticsearch_connecti
     size_t size;
     int32_t ret = -1;
 
+    /* continue appending data so long as it is available */
     while ((ret = i_stream_read_data(conn->payload, &data, &size, 0)) > 0) {
-        /* TODO: there has to be a better way to do this. How do we process JSON in chunks? 
-         * Though as we only return the UID, this would be a lot of UID's. */
         str_append(conn->ctx->email, (const char *)data);
 
         i_stream_skip(conn->payload, size);
@@ -536,8 +537,9 @@ int32_t elasticsearch_connection_refresh(struct elasticsearch_connection *conn)
     /* set-up the context */
     conn->post_type = ELASTICSEARCH_POST_TYPE_REFRESH;
 
-    /* build the url */
-    /* TODO: we probably don't want to refresh the ENTIRE ES server */
+    /* build the url; we don't have any choice but to refresh the entire 
+     * ES server here because Dovecot's refresh API doesn't give us the
+     * mailbox that is being refreshed. */
     url = t_strconcat(conn->http_base_url, "/_refresh/", NULL);
 
     /* perform the actual POST */

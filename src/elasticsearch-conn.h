@@ -22,17 +22,17 @@ struct elasticsearch_result {
     ARRAY_TYPE(fts_score_map) scores;
 };
 
-int elasticsearch_connection_init(const char *url, bool debug,
+int32_t elasticsearch_connection_init(const char *url, bool debug,
                                   struct elasticsearch_connection **conn_r,
                                   const char **error_r);
 
 void elasticsearch_connection_deinit(struct elasticsearch_connection *conn);
 
 
-int elasticsearch_connection_update(struct elasticsearch_connection *conn,
+int32_t elasticsearch_connection_update(struct elasticsearch_connection *conn,
                                     const char *cmd);
 
-int elasticsearch_connection_post(struct elasticsearch_connection *conn,
+int32_t elasticsearch_connection_post(struct elasticsearch_connection *conn,
                                   const char *url, const char *cmd);
 
 void json_parse_array(json_object *jobj, char *key,
@@ -55,9 +55,9 @@ struct http_client_request*
 elasticsearch_connection_http_request(struct elasticsearch_connection *conn,
                                       const char *url);
 
-int elasticsearch_connection_refresh(struct elasticsearch_connection *conn);
+int32_t elasticsearch_connection_refresh(struct elasticsearch_connection *conn);
 
-int elasticsearch_connection_select(struct elasticsearch_connection *conn, pool_t pool,
+int32_t elasticsearch_connection_select(struct elasticsearch_connection *conn, pool_t pool,
     const char *query, const char *box, struct elasticsearch_result ***box_results_r);
 
 #endif
