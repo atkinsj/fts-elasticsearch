@@ -1,5 +1,5 @@
 AM_CFLAGS= \
-    -I$(dovecotdir)/src/plugins/fts \
+    -I$(abs_dovecotdir)/src/plugins/fts \
 	$(LIBDOVECOT_INCLUDE) 
 
 AM_LDFLAGS= -ljson-c 
