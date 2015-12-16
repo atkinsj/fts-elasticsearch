@@ -615,10 +615,10 @@ fts_backend_elasticsearch_lookup(struct fts_backend *_backend, struct mailbox *b
     bool and_args = (flags & FTS_LOOKUP_FLAG_AND_ARGS) != 0;
     pool_t pool;
     int32_t ret = -1;
+    uint32_t num_rows = 0;
 
     /* validate our input */
-    if (_backend == NULL || box == NULL || args == NULL || result == NULL)
-    {
+    if (_backend == NULL || box == NULL || args == NULL || result == NULL) {
         i_error("fts_elasticsearch: critical error during lookup");
 
         return -1;
@@ -637,7 +637,13 @@ fts_backend_elasticsearch_lookup(struct fts_backend *_backend, struct mailbox *b
     /* open the mailbox */
     mailbox_get_open_status(box, STATUS_UIDNEXT, &status);
 
-    /* TODO: pagination, status.uidnext shows where we're up to. */
+    /* default ES is limited to 10,000 results */
+    /* TODO: paginate? */
+    if (status.uidnext >= 10000) {
+        num_rows = 10000;
+    } else {
+        num_rows = status.uidnext;
+    }
 
     /* start building our query object */
     term = json_object_new_object();
@@ -677,7 +683,7 @@ fts_backend_elasticsearch_lookup(struct fts_backend *_backend, struct mailbox *b
     json_object_array_add(fields_root, json_object_new_string("uid"));
     json_object_array_add(fields_root, json_object_new_string("box"));
     json_object_object_add(query, "fields", fields_root);
-    json_object_object_add(query, "size", json_object_new_int(INT_MAX));
+    json_object_object_add(query, "size", json_object_new_int(num_rows));
     
     ret = elasticsearch_connection_select(backend->elasticsearch_conn, pool,
         json_object_to_json_string(query), box_guid, &es_results);
