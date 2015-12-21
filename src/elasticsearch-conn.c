@@ -72,8 +72,6 @@ int32_t elasticsearch_connection_init(const char *url, bool debug,
     if (error_r == NULL || url == NULL || conn_r == NULL) {
         i_debug("fts_elasticsearch: error initialising ElasticSearch connection");
         return -1;
-    } else {
-        /* safe to continue */
     }
 
     /* validate the url */
@@ -146,7 +144,6 @@ int32_t elasticsearch_connection_update(struct elasticsearch_connection *conn,
 
         return conn->request_status;
     } else {
-        /* conn is NULL for some reason */
         i_debug("fts_elasticsearch: connection_update: conn is NULL");
 
         return -1;
@@ -163,8 +160,6 @@ int32_t elasticsearch_connection_post(struct elasticsearch_connection *conn,
         i_error("fts_elasticsearch: connection_post: critical error during POST");
 
         return -1;
-    } else {
-        /* safe to continue */
     }
 
     /* binds a callback object to elasticsearch_connection_http_response */
@@ -320,7 +315,11 @@ void json_parse(json_object *jobj, struct elasticsearch_connection *conn)
         /* the output of the json_parse varies per post type */
         switch (conn->post_type) {
         case ELASTICSEARCH_POST_TYPE_LAST_UID:
-            elasticsearch_connection_last_uid_json(conn, key, val);
+            /* we only care about the uid field */
+            if (strcmp(key, "uid") == 0) {
+                elasticsearch_connection_last_uid_json(conn, key, val);
+            }
+
             break;
         case ELASTICSEARCH_POST_TYPE_SELECT:
             elasticsearch_connection_select_json(conn, key, val);
@@ -361,7 +360,7 @@ void json_parse(json_object *jobj, struct elasticsearch_connection *conn)
 } 
 
 static int32_t elasticsearch_json_parse(struct elasticsearch_connection *conn,
-                                    string_t *data)
+                                        string_t *data)
 {
     json_object *jobj = NULL;
 
@@ -377,7 +376,8 @@ static int32_t elasticsearch_json_parse(struct elasticsearch_connection *conn,
     if (jobj == NULL) {
         /* TODO: is this because ES only returns partial JSON and chunks it and
          * we just aren't handling the HTTP chunking, or is it JSON chunking. */
-        i_error("fts-elasticsearch: parsing of JSON reply failed, likely >1Mb result");
+        i_error("fts-elasticsearch: unable to parse response JSON");
+        i_error("fts_elasticsearch: response JSON: %s", str_c(data));
 
         return -1;
     }
@@ -406,11 +406,12 @@ static void elasticsearch_connection_payload_input(struct elasticsearch_connecti
     } else {
         if (conn->payload->stream_errno != 0) {
             i_error("fts_elasticsearch: failed to read payload from HTTP server: %m");
-            conn->request_status = -1;
-        }
 
-        /* parse the output */
-        elasticsearch_json_parse(conn, conn->ctx->email);
+            conn->request_status = -1;
+        } else {
+            /* parse the output */
+            elasticsearch_json_parse(conn, conn->ctx->email);
+        }
 
         /* clean-up */
         str_free(&conn->ctx->email);
@@ -429,8 +430,6 @@ int32_t elasticsearch_connection_last_uid(struct elasticsearch_connection *conn,
         i_error("fts_elasticsearch: last_uid: critical error while fetching last UID");
 
         return -1;
-    } else {
-        /* safe to continue */
     }
 
     /* set-up the context */
@@ -454,17 +453,21 @@ static void
 elasticsearch_connection_select_response(const struct http_response *response,
                                          struct elasticsearch_connection *conn)
 {
-    /* 404's usually mean the index is missing. it could mean you also hit a
-     * non-ES service but this seems better than a second indices exists lookup */
-    if (response->status / 100 != 2 && response->status != 404) {
-        i_error("fts_elasticsearch: lookup failed: %s", response->reason);
+    /* 404's on non-updates mean the index doesn't exist and should be indexed. 
+     * we don't want to flood the error log with useless messages since dovecot
+     * will redo the query automatically after indexing it. */
+    if (conn->post_type != ELASTICSEARCH_POST_TYPE_UPDATE && response->status == 404) {
         conn->request_status = -1;
+
         return;
     }
 
-    /* give the user a chance to troubleshoot with debug enabled */
-    if (conn->debug && response->status == 404) {
-        i_debug("fts_elasticsearch: lookup failed due to 404 not found");
+    /* 404's usually mean the index is missing. it could mean you also hit a
+     * non-ES service but this seems better than a second indices exists lookup */
+    if (response->status / 100 != 2) {
+        i_error("fts_elasticsearch: lookup failed: %s", response->reason);
+        conn->request_status = -1;
+        return;
     }
 
     if (response->payload == NULL) {
@@ -477,7 +480,7 @@ elasticsearch_connection_select_response(const struct http_response *response,
      * as they are causing I/O leaks. */
     i_stream_ref(response->payload);
     conn->payload = response->payload;
-    conn->ctx->email = str_new(default_pool, 1000000);
+    conn->ctx->email = str_new(default_pool, 1024 * 1024); /* 1Mb */
     conn->io = io_add_istream(response->payload, elasticsearch_connection_payload_input, conn);
     elasticsearch_connection_payload_input(conn);
 }
@@ -530,8 +533,6 @@ int32_t elasticsearch_connection_refresh(struct elasticsearch_connection *conn)
         i_error("fts_elasticsearch: refresh: critical error");
 
         return -1;
-    } else {
-        /* safe to continue */
     }
 
     /* set-up the context */
@@ -565,8 +566,6 @@ int32_t elasticsearch_connection_select(struct elasticsearch_connection *conn,
         i_error("fts_elasticsearch: select: critical error during select");
 
         return -1;
-    } else {
-        /* safe to continue */
     }
 
     /* set-up the context */

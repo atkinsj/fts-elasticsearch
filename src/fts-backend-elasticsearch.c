@@ -1,3 +1,9 @@
+#include <ctype.h>
+#include <syslog.h>
+#include <unistd.h>
+#include <inttypes.h>
+#include <limits.h>
+
 #include "lib.h"
 #include "array.h"
 #include "str.h"
@@ -11,14 +17,56 @@
 #include "fts-elasticsearch-plugin.h"
 #include "elasticsearch-conn.h"
 
-#include <ctype.h>
-#include <syslog.h>
-#include <unistd.h>
-#include <inttypes.h>
-#include <limits.h>
-#include <json-c/json.h>
+/* default bulk index size of 5MB */
+#define ELASTICSEARCH_BULK_SIZE 5000000
 
-#define ELASTICSEARCH_BULK_SIZE 15000000 /* 15 megabytes */
+/* values that must be escaped in query fields */
+static const char *es_query_escape_chars = "\"\\";
+
+/* values that must be escaped in a bulk update value field */
+static const char *es_update_escape_chars = "\"\\";
+
+/* values that must be escaped in field names */
+static const char *es_field_escape_chars = ".#*\"";
+
+/* the search JSON */
+static const char JSON_SEARCH[] = 
+    "{ \
+        \"query\": { \
+            \"multi_match\": { \
+                \"query\": \"%s\", \
+                \"operator\": \"%s\", \
+                \"fields\": [ %s ] \
+            } \
+        }, \
+        \"fields\": [ \"uid\", \"box\" ], \
+        \"size\": %lu \
+    }";
+
+/* the last_uid lookup json */
+static const char JSON_LAST_UID[] =
+    "{ \
+      \"sort\": { \
+        \"uid\": \"desc\" \
+      }, \
+      \"query\": { \
+        \"match_all\": { } \
+      }, \
+      \"fields\": [ \
+        \"uid\" \
+      ], \
+      \"size\": 1 \
+    }";
+
+/* bulk index header */
+static const char JSON_BULK_HEADER[] =
+    "{ \
+      \"%s\": { \
+        \"_index\": \"%s\", \
+        \"_type\": \"%s\", \
+        \"_id\": %d \
+      } \
+    }";
 
 struct elasticsearch_fts_backend {
     struct fts_backend backend;
@@ -34,27 +82,79 @@ struct elasticsearch_fts_backend_update_context {
     uint32_t prev_uid;
 
     /* used to build multi-part messages. */
-    string_t *temp;
+    string_t *temp_body;
     string_t *current_field;
 
-    /* we store this as a string due to the way ES handles bulk indexing JSON.
-     * it is not actually valid JSON and thus can't be built with json-c. */
+    /* build a json string for bulk indexing */
     string_t *json_request;
 
-    /* expunges and updates get called in the same message */
-    string_t *expunge_json_request;
+    /* temporary storage for various operations */
+    string_t *temp;
 
     /* current request size */
     size_t request_size;
 
-    /* builds the current message as a JSON object so we can append it later. */
-    json_object *message;
-
     unsigned int body_open:1;
     unsigned int documents_added:1;
     unsigned int expunges:1;
-    unsigned int truncate_header:1;
 };
+
+static const char *es_replace(const char *str, const char *replace)
+{
+    string_t *ret;
+    uint32_t i;
+
+    ret = t_str_new(strlen(str) + 16);
+
+    for (i = 0; str[i] != '\0'; i++) {
+        if (strchr(replace, str[i]) != NULL)
+            str_append_c(ret, '_');
+        else
+            str_append_c(ret, str[i]);
+    }
+
+    return str_c(ret);
+}
+
+static const char *es_escape(const char *str, const char *escape)
+{
+    string_t *ret;
+    uint32_t i;
+
+    ret = t_str_new(strlen(str) + 16);
+
+    for (i = 0; str[i] != '\0'; i++) {
+        if (strchr(escape, str[i]) != NULL)
+            str_append_c(ret, '\\');
+
+        /* escape control characters that JSON isn't a fan of */
+        switch(str[i])
+        {
+            case '\t': str_append(ret, "\\t"); break;
+            case '\b': str_append(ret, "\\b"); break;
+            case '\n': str_append(ret, "\\n"); break;
+            case '\r': str_append(ret, "\\r"); break;
+            case '\f': str_append(ret, "\\f"); break;
+            case 0x1C: str_append(ret, "0x1C"); break;
+            case 0x1D: str_append(ret, "0x1D"); break;
+            case 0x1E: str_append(ret, "0x1E"); break;
+            case 0x1F: str_append(ret, "0x1F"); break;
+            default: str_append_c(ret, str[i]); break;
+        }
+    }
+
+    return str_c(ret);
+}
+
+static const char *es_update_escape(const char *str)
+{
+    return es_escape(str, es_update_escape_chars);
+}
+
+static const char *es_query_escape(const char *str)
+{
+    return es_escape(str, es_query_escape_chars);
+}
 
 static struct fts_backend *fts_backend_elasticsearch_alloc(void)
 {
@@ -101,7 +201,7 @@ fts_backend_elasticsearch_deinit(struct fts_backend *_backend)
 }
 
 static void
-fts_backend_elasticsearch_doc_close(struct elasticsearch_fts_backend_update_context *_ctx)
+fts_backend_elasticsearch_bulk_end(struct elasticsearch_fts_backend_update_context *_ctx)
 {
     struct elasticsearch_fts_backend_update_context *ctx = NULL;
 
@@ -109,21 +209,15 @@ fts_backend_elasticsearch_doc_close(struct elasticsearch_fts_backend_update_cont
     if (_ctx != NULL) {
         ctx = (struct elasticsearch_fts_backend_update_context *)_ctx;
 
-        /* convert our completed message to a string and tack it on to our request */
-        str_append(ctx->json_request, json_object_to_json_string(ctx->message));
-        str_append(ctx->json_request, "\n");
-
-        /* clean up our json object, it is no longer required */
-        json_object_put(ctx->message);
+        /* close up this line in the bulk request */
+        str_append(ctx->json_request, "}\n");
 
         /* clean-up for the next message */
-        str_truncate(ctx->temp, 0);
+        str_truncate(ctx->temp_body, 0);
         str_truncate(ctx->current_field, 0);
 
         if (ctx->body_open) {
             ctx->body_open = FALSE;
-        } else {
-            /* nothing to do if the body isn't open */
         }
     }
 }
@@ -136,8 +230,6 @@ fts_backend_elasticsearch_get_last_uid(struct fts_backend *_backend,
     struct fts_index_header hdr;
     struct elasticsearch_fts_backend *backend = NULL;
     const char *box_guid = NULL;
-    json_object *root = NULL, *sort_root = NULL;
-    json_object *query_root = NULL, *fields_root = NULL;
     int32_t ret;
 
     /* ensure our backend has been initialised */
@@ -152,7 +244,7 @@ fts_backend_elasticsearch_get_last_uid(struct fts_backend *_backend,
 
     /**
      * assume the dovecot index will always match ours for uids. this saves
-     * on repeated calls to ES when fts_autoindex=true.
+     * on repeated calls to ES, particularly noticable when fts_autoindex=true.
      *
      * this has a couple of side effects:
      *  1. if the ES index has been blown away, this will return a valid
@@ -166,7 +258,7 @@ fts_backend_elasticsearch_get_last_uid(struct fts_backend *_backend,
         *last_uid_r = hdr.last_indexed_uid;
 
         return 0;
-    }
+    } 
 
     if (fts_mailbox_get_guid(box, &box_guid) < 0) {
         i_error("fts-elasticsearch: get_last_uid: failed to get mbox guid");
@@ -174,27 +266,9 @@ fts_backend_elasticsearch_get_last_uid(struct fts_backend *_backend,
         return -1;
     }
 
-    /* build a JSON object to query the last uid */
-    root = json_object_new_object();
-    sort_root = json_object_new_object();
-    query_root = json_object_new_object();
-    fields_root = json_object_new_array();
-
-    json_object_object_add(sort_root, "uid", json_object_new_string("desc"));
-    json_object_object_add(query_root, "match_all", json_object_new_object());
-    json_object_array_add(fields_root, json_object_new_string("uid"));
-
-    json_object_object_add(root, "sort", sort_root);
-    json_object_object_add(root, "query", query_root);
-    json_object_object_add(root, "fields", fields_root);
-    json_object_object_add(root, "size", json_object_new_int(1));
-
     /* call ES */
     ret = elasticsearch_connection_last_uid(backend->elasticsearch_conn,
-        json_object_to_json_string(root), box_guid);
-
-    /* clean it up */
-    json_object_put(root);
+        JSON_LAST_UID, box_guid);
 
     if (ret > 0) {
         *last_uid_r = ret;
@@ -218,10 +292,14 @@ fts_backend_elasticsearch_update_init(struct fts_backend *_backend)
 
     ctx = i_new(struct elasticsearch_fts_backend_update_context, 1);
     ctx->ctx.backend = _backend;
-    ctx->current_field = NULL;
-    ctx->temp = NULL;
-    ctx->json_request = NULL;
-    ctx->expunge_json_request = NULL;
+
+    /* allocate strings for building messages and multi-part messages
+     * with a sensible initial size. */
+    ctx->current_field = str_new(default_pool, 1024);
+    ctx->temp_body = str_new(default_pool, 1024 * 64);
+    ctx->temp = str_new(default_pool, 1024 * 64);
+    ctx->json_request = str_new(default_pool, 1024 * 64);
+    ctx->request_size = 0;
 
     return &ctx->ctx;
 }
@@ -235,38 +313,32 @@ fts_backend_elasticsearch_update_deinit(struct fts_backend_update_context *_ctx)
     /* validate our input parameters */
     if (_ctx == NULL || _ctx->backend == NULL) {
         i_error("fts_elasticsearch: critical error in update_deinit");
+
         return -1;
     } else {
         ctx = (struct elasticsearch_fts_backend_update_context *)_ctx;
         backend = (struct elasticsearch_fts_backend *)_ctx->backend;
     }
 
-    /* expunges will also end up here; only clean-up and post updates */
-    if (ctx->json_request != NULL) {
+    /* clean-up: expunges don't need as much clean-up */
+    if (!ctx->expunges) {
         /* this gets called when the last message is finished, so close it up */
-        fts_backend_elasticsearch_doc_close(ctx);
-
-        /* do our bulk post */
-        elasticsearch_connection_update(backend->elasticsearch_conn,
-                                        str_c(ctx->json_request));
+        fts_backend_elasticsearch_bulk_end(ctx);
 
         /* cleanup */
         memset(ctx->box_guid, 0, sizeof(ctx->box_guid));
         str_free(&ctx->current_field);
+        str_free(&ctx->temp_body);
         str_free(&ctx->temp);
-        str_free(&ctx->json_request); 
         ctx->request_size = 0;
     }
 
-    /* if there have been any expunges, we should process them now */
-    if (ctx->expunges) {
-        /* do our bulk post */
-        elasticsearch_connection_update(backend->elasticsearch_conn,
-                                        str_c(ctx->expunge_json_request));
+    /* perform the actual post */
+    elasticsearch_connection_update(backend->elasticsearch_conn,
+                                    str_c(ctx->json_request));
 
-        str_free(&ctx->expunge_json_request);
-    }
-
+    /* global clean-up */
+    str_free(&ctx->json_request); 
     i_free(ctx);
     
     return 0;
@@ -286,15 +358,15 @@ fts_backend_elasticsearch_update_set_mailbox(struct fts_backend_update_context *
          * clean up from our previous mailbox indexing. */
         if (ctx->prev_uid != 0) {
             fts_index_set_last_uid(ctx->prev_box, ctx->prev_uid);
+
             ctx->prev_uid = 0;
         }
 
         if (box != NULL) {
             if (fts_mailbox_get_guid(box, &box_guid) < 0) {
                 i_debug("fts-elasticsearch: update_set_mailbox: fts_mailbox_get_guid failed");
+
                 _ctx->failed = TRUE;
-            } else {
-                /* successfuly got mailbox GUID and can continue */
             }
 
             /* store the current mailbox we're on in our state struct */
@@ -302,49 +374,59 @@ fts_backend_elasticsearch_update_set_mailbox(struct fts_backend_update_context *
             memcpy(ctx->box_guid, box_guid, sizeof(ctx->box_guid) - 1);
         } else {
             /* a box of null appears to indicate that indexing is complete. */
+            memset(ctx->box_guid, 0, sizeof(ctx->box_guid));
         }
 
         ctx->prev_box = box;
     } else {
         i_error("fts_elasticsearch: update_set_mailbox: context was NULL");
+
+        return;
     }
 }
 
+static void elasticsearch_add_update_field(string_t *temp, string_t *message,
+                                           string_t *field, string_t *value)
+{
+    str_truncate(temp, 0);
+
+    str_printfa(temp,
+                ", \"%s\": \"%s\"",
+                es_replace(str_c(field), es_field_escape_chars),
+                es_update_escape(str_c(value)));
+
+    str_append_str(message, temp);
+}
+
 static void
-fts_backend_elasticsearch_doc_open(struct elasticsearch_fts_backend_update_context *_ctx,
+fts_backend_elasticsearch_bulk_start(struct elasticsearch_fts_backend_update_context *_ctx,
                                    uint32_t uid, string_t *json_request,
-                                   json_object *message, const char *action_name)
+                                   const char *action_name)
 {
     struct elasticsearch_fts_backend_update_context *ctx =
         (struct elasticsearch_fts_backend_update_context *)_ctx;
-    json_object *temp = NULL, *action = NULL, *jint = NULL, *jstring = NULL;
+    string_t *temp = str_new(default_pool, 1024);
 
     /* track that we've added documents */
     ctx->documents_added = TRUE;
 
-    /* TODO: this json-c code must leak like crazy? i'm not sure how it handles
-     * reference counts. */
-
-    temp = json_object_new_object();
-
-    json_object_object_add(temp, "_index", json_object_new_string(ctx->box_guid));
-    json_object_object_add(temp, "_type", json_object_new_string("mail"));
-    json_object_object_add(temp, "_id", json_object_new_int(uid));
-
-    action = json_object_new_object();
-    json_object_object_add(action, action_name, temp);
-
-    str_append(json_request, json_object_to_json_string(action));
+    /* add the header that starts the bulk transaction */
+    str_printfa(temp, JSON_BULK_HEADER, action_name, ctx->box_guid, "mail", uid);
+    str_append_str(json_request, temp);
     str_append(json_request, "\n");
 
-    jint = json_object_new_int(uid);
-    json_object_object_add(message, "uid", jint);
+    /* expunges don't need anything more than the action line */
+    if (!ctx->expunges) {
+        /* reusing the same temp variable */
+        str_truncate(temp, 0);
 
-    jstring = json_object_new_string(ctx->box_guid);
-    json_object_object_add(message, "box", jstring);
+        /* add the first two fields; these are static on every message. */
+        str_printfa(temp, "{ \"uid\": %d, \"box\": \"%s\"", uid, ctx->box_guid);
+        str_append_str(json_request, temp);
+    }
 
     /* clean-up */
-    json_object_put(action);
+    str_free(&temp);
 }
 
 static void
@@ -356,23 +438,17 @@ fts_backend_elasticsearch_uid_changed(struct fts_backend_update_context *_ctx,
     struct elasticsearch_fts_backend *backend =
             (struct elasticsearch_fts_backend *)_ctx->backend;
 
-    if (!ctx->documents_added) {
-        i_assert(ctx->prev_uid == 0);
-
-        /* allocate strings for building messages and multi-part messages
-         * with a sensible initial size. */
-        ctx->current_field = str_new(default_pool, 1024 * 64);
-        ctx->temp = str_new(default_pool, 1024 * 64);
-        ctx->json_request = str_new(default_pool, 1024 * 64);
-        ctx->request_size = 0;
-    } else {
+    if (ctx->documents_added) {
         /* this is the end of an old message. nb: the last message to be indexed
          * will not reach here but will instead be caught in update_deinit. */
-        fts_backend_elasticsearch_doc_close(ctx);
+        fts_backend_elasticsearch_bulk_end(ctx);
     }
 
     /* chunk up our requests in to reasonable sizes */
-    if (ctx->request_size > ELASTICSEARCH_BULK_SIZE) {        
+    if (ctx->request_size > ELASTICSEARCH_BULK_SIZE) {  
+        /* close the document */
+        fts_backend_elasticsearch_bulk_end(ctx);
+
         /* do an early post */
         elasticsearch_connection_update(backend->elasticsearch_conn,
                                         str_c(ctx->json_request));
@@ -383,10 +459,8 @@ fts_backend_elasticsearch_uid_changed(struct fts_backend_update_context *_ctx,
     }
     
     ctx->prev_uid = uid;
-    ctx->truncate_header = FALSE;
-    ctx->message = json_object_new_object();
-    fts_backend_elasticsearch_doc_open(ctx, uid, ctx->json_request,
-                                       ctx->message, "index");
+    
+    fts_backend_elasticsearch_bulk_start(ctx, uid, ctx->json_request, "index");
 }
 
 static bool
@@ -403,8 +477,9 @@ fts_backend_elasticsearch_update_set_build_key(struct fts_backend_update_context
     }
 
     /* if the uid doesn't match our expected one, we've moved on to a new message */
-    if (key->uid != ctx->prev_uid)
+    if (key->uid != ctx->prev_uid) {
         fts_backend_elasticsearch_uid_changed(_ctx, key->uid);
+    }
 
     switch (key->type) {
     case FTS_BACKEND_BUILD_KEY_HDR: /* fall through */
@@ -436,7 +511,7 @@ fts_backend_elasticsearch_update_build_more(struct fts_backend_update_context *_
         ctx = (struct elasticsearch_fts_backend_update_context *)_ctx;
 
         /* build more message body */
-        str_append_n(ctx->temp, data, size);
+        str_append_n(ctx->temp_body, data, size);
 
         /* keep track of the total request size for chunking */
         ctx->request_size += size;
@@ -453,17 +528,15 @@ static void
 fts_backend_elasticsearch_update_unset_build_key(struct fts_backend_update_context *_ctx)
 {
     struct elasticsearch_fts_backend_update_context *ctx = NULL;
-    json_object *jstring = NULL;
 
     if (_ctx != NULL) {
         ctx = (struct elasticsearch_fts_backend_update_context *)_ctx;
 
         /* field is complete, add it to our message. */
-        jstring = json_object_new_string(str_c(ctx->temp));
-        json_object_object_add(ctx->message, str_c(ctx->current_field), jstring);
+        elasticsearch_add_update_field(ctx->temp, ctx->json_request, ctx->current_field, ctx->temp_body);
 
         /* clean-up our temp */
-        str_truncate(ctx->temp, 0);
+        str_truncate(ctx->temp_body, 0);
         str_truncate(ctx->current_field, 0);
     }
 }
@@ -474,26 +547,12 @@ fts_backend_elasticsearch_update_expunge(struct fts_backend_update_context *_ctx
 {
     struct elasticsearch_fts_backend_update_context *ctx =
         (struct elasticsearch_fts_backend_update_context *)_ctx;
-    json_object *message = NULL;
 
     /* update the context to note that there have been expunges */
     ctx->expunges = TRUE;
 
-    /* set-up our json request */
-    if (ctx->expunge_json_request == NULL) {
-        ctx->expunge_json_request = str_new(default_pool, 1024 * 64);
-    } else {
-        /* ctx->expunge_json_request was allocated in an earlier call */
-    }
-
-    message = json_object_new_object();
-
-    /* we don't need a corresponding doc_close call, the bulk delete API is shorter */
-    fts_backend_elasticsearch_doc_open(ctx, uid, ctx->expunge_json_request,
-                                       message, "delete");
-
-    /* clean-up */
-    json_object_put(message);
+    /* add the delete action */
+    fts_backend_elasticsearch_bulk_start(ctx, uid, ctx->json_request, "delete");
 }
 
 static int fts_backend_elasticsearch_refresh(struct fts_backend *_backend)
@@ -517,8 +576,8 @@ static int fts_backend_elasticsearch_optimize(struct fts_backend *backend ATTR_U
 }
 
 static bool
-elasticsearch_add_definite_query(struct mail_search_arg *arg, json_object *value,
-                                 json_object *fields)
+elasticsearch_add_definite_query(struct mail_search_arg *arg, string_t *value,
+                                 string_t *fields)
 {
     /* validate our input */
     if (arg == NULL || value == NULL || fields == NULL) {
@@ -534,8 +593,10 @@ elasticsearch_add_definite_query(struct mail_search_arg *arg, json_object *value
 
         break;
     case SEARCH_BODY:
-        /* SEARCH_BODY has a hdr_field_name of null. */
-        json_object_array_add(fields, json_object_new_string("body"));
+        /* SEARCH_BODY has a hdr_field_name of null. we append a comma here 
+         * because body can be selected in addition to other fields. it's 
+         * trimmed later before being passed to ES if it's the last element. */
+        str_append(fields, "\"body\",");
 
         break;
     case SEARCH_HEADER: /* fall through */
@@ -547,27 +608,25 @@ elasticsearch_add_definite_query(struct mail_search_arg *arg, json_object *value
             return FALSE;
         }
 
-        json_object_array_add(fields,
-            json_object_new_string(t_str_lcase(arg->hdr_field_name)));
+        str_append(fields, "\"");
+        str_append(fields, t_str_lcase(es_query_escape(arg->hdr_field_name)));
+        str_append(fields, "\",");
 
         break;
     default:
         return FALSE;
     }
 
-    /* TODO: can we wrap a query_string in a not filter? */
     if (arg->match_not) {
         i_debug("fts-elasticsearch: arg->match_not is true");
     }
-
-    /* we always want to add a query value */
-    json_object_object_add(value, "query", json_object_new_string(arg->value.str));
+    
 
     return TRUE;
 }
 
 static bool
-elasticsearch_add_definite_query_args(json_object *fields, json_object *value,
+elasticsearch_add_definite_query_args(string_t *fields, string_t *value,
                                       struct mail_search_arg *arg)
 {
     bool field_added = FALSE;
@@ -583,11 +642,16 @@ elasticsearch_add_definite_query_args(json_object *fields, json_object *value,
         if (arg->value.subargs != NULL) {
             field_added = elasticsearch_add_definite_query_args(fields, value,
                 arg->value.subargs);
-        } else {
-            /* no subargs to process */
         }
 
         if (elasticsearch_add_definite_query(arg, value, fields)) {
+            /* the value is the same for every arg passed, only add the value
+             * to our search json once. */
+            if (!field_added) {
+                /* we always want to add the value */
+                str_append(value, es_query_escape(arg->value.str));
+            }
+
             /* this is important to set. if this is FALSE, Dovecot will fail
              * over to its regular built-in search to produce results for
              * this argument. */
@@ -605,29 +669,33 @@ fts_backend_elasticsearch_lookup(struct fts_backend *_backend, struct mailbox *b
                                  enum fts_lookup_flags flags,
                                  struct fts_result *result)
 {
+    /* state tracking */
     struct elasticsearch_fts_backend *backend = NULL;
     struct elasticsearch_result **es_results = NULL;
-    struct mailbox_status status;
-    json_object *term = NULL, *fields = NULL, *value = NULL;
-    json_object *query = NULL, *fields_root = NULL;
-    const char *box_guid = NULL;
-    bool valid = FALSE;
     bool and_args = (flags & FTS_LOOKUP_FLAG_AND_ARGS) != 0;
-    pool_t pool;
+
+    /* mailbox information */
+    struct mailbox_status status;
+    const char *box_guid = NULL;
+
+    /* temp variables */
+    pool_t pool = pool_alloconly_create("fts elasticsearch search", 1024);
     int32_t ret = -1;
-    uint32_t num_rows = 0;
+    size_t num_rows = 0;
+    /* json query building */
+    string_t *str = str_new(pool, 1024);
+    string_t *query = str_new(pool, 1024);
+    string_t *fields = str_new(pool, 1024);
 
     /* validate our input */
     if (_backend == NULL || box == NULL || args == NULL || result == NULL) {
         i_error("fts_elasticsearch: critical error during lookup");
 
         return -1;
-    } else {
-        /* safe to continue */
     }
 
     backend = (struct elasticsearch_fts_backend *)_backend;
-    pool = pool_alloconly_create("fts elasticsearch search", 1024);
+    
 
     /* get the mailbox guid */
     if (fts_mailbox_get_guid(box, &box_guid) < 0) {
@@ -645,48 +713,25 @@ fts_backend_elasticsearch_lookup(struct fts_backend *_backend, struct mailbox *b
         num_rows = status.uidnext;
     }
 
-    /* start building our query object */
-    term = json_object_new_object();
-    fields = json_object_new_array();
-    value = json_object_new_object();
-
-    /* build the query */
-    valid = elasticsearch_add_definite_query_args(fields, value, args);
-
-    /* return early if it failed */
-    if (!valid) {
+    /* attempt to build the query */
+    if (!elasticsearch_add_definite_query_args(fields, query, args)) {
         return -1;
     }
 
+    /* remove the trailing ',' */
+    str_delete(fields, str_len(fields) - 1, 1);
+
     /* if no fields were added, add _all as our only field */
-    if (json_object_array_length(fields) == 0) {
-        json_object_array_add(fields, json_object_new_string("_all"));
+    if (str_len(fields) == 0) {
+        str_append(fields, "\"_all\"");
     }
 
-    /* determine if we should AND or OR */
-    if (and_args) {
-        json_object_object_add(value, "operator", json_object_new_string("and"));
-    }
-    else {
-        json_object_object_add(value, "operator", json_object_new_string("or"));
-    }
-    
-    json_object_object_add(value, "fields", fields);
-    json_object_object_add(term, "multi_match", value);
-
-    /* wrap it in the ES 'query' field */
-    query = json_object_new_object();
-    json_object_object_add(query, "query", term);
-
-    /* only return the UID field */
-    fields_root = json_object_new_array();
-    json_object_array_add(fields_root, json_object_new_string("uid"));
-    json_object_array_add(fields_root, json_object_new_string("box"));
-    json_object_object_add(query, "fields", fields_root);
-    json_object_object_add(query, "size", json_object_new_int(num_rows));
+    /* parse the json */
+    str_printfa(str, JSON_SEARCH, str_c(query),
+                and_args == 1 ? "and" : "or", str_c(fields), num_rows);
     
     ret = elasticsearch_connection_select(backend->elasticsearch_conn, pool,
-        json_object_to_json_string(query), box_guid, &es_results);
+                                          str_c(str), box_guid, &es_results);
 
     /* build our fts_result return */
     result->box = box;
@@ -703,8 +748,10 @@ fts_backend_elasticsearch_lookup(struct fts_backend *_backend, struct mailbox *b
     }
 
     /* clean-up */
-    json_object_put(query);
     pool_unref(&pool);
+    str_free(&str);
+    str_free(&query);
+    str_free(&fields);
 
     return ret;
 }
