@@ -41,7 +41,6 @@ AC_SEARCH_LIBS([json_object_object_get_ex], [json json-c], [ AC_DEFINE([JSON_HAS
 AC_CHECK_HEADERS([inttypes.h stdlib.h syslog.h unistd.h])
 
 # Checks for typedefs, structures, and compiler characteristics.
-AC_CHECK_HEADER_STDBOOL
 AC_TYPE_SIZE_T
 AC_TYPE_UINT32_T
 
