@@ -244,7 +244,7 @@ fts_backend_elasticsearch_get_last_uid(struct fts_backend *_backend,
 
     /**
      * assume the dovecot index will always match ours for uids. this saves
-     * on repeated calls to ES, particularly noticable when fts_autoindex=true.
+     * on repeated calls to ES, particularly noticeable when fts_autoindex=true.
      *
      * this has a couple of side effects:
      *  1. if the ES index has been blown away, this will return a valid

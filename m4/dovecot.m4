@@ -31,7 +31,7 @@ AC_DEFUN([DC_PLUGIN_DEPS],[
 	unset _plugin_deps
 ])
 
-# Substitute every var in the given comma seperated list
+# Substitute every var in the given comma separated list
 AC_DEFUN([AX_SUBST_L],[
 	m4_foreach([__var__], [$@], [AC_SUBST(__var__)])
 ])
