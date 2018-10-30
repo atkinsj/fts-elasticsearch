@@ -39,7 +39,7 @@ static const char JSON_SEARCH[] =
                 \"fields\": [ %s ] \
             } \
         }, \
-        \"fields\": [ \"uid\", \"box\" ], \
+        \"stored_fields\": [ \"uid\", \"box\" ], \
         \"size\": %lu \
     }";
 
@@ -52,7 +52,7 @@ static const char JSON_LAST_UID[] =
       \"query\": { \
         \"match_all\": { } \
       }, \
-      \"fields\": [ \
+      \"stored_fields\": [ \
         \"uid\" \
       ], \
       \"size\": 1 \
