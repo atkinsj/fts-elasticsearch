@@ -446,8 +446,6 @@ fts_backend_elasticsearch_uid_changed(struct fts_backend_update_context *_ctx,
 
     /* chunk up our requests in to reasonable sizes */
     if (ctx->request_size > ELASTICSEARCH_BULK_SIZE) {  
-        /* close the document */
-        fts_backend_elasticsearch_bulk_end(ctx);
 
         /* do an early post */
         elasticsearch_connection_update(backend->elasticsearch_conn,
