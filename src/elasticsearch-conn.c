@@ -518,7 +518,7 @@ elasticsearch_connection_http_request(struct elasticsearch_connection *conn,
                                        conn);
         http_client_request_set_port(http_req, conn->http_port);
         http_client_request_set_ssl(http_req, conn->http_ssl);
-        http_client_request_add_header(http_req, "Content-Type", "text/json");
+        http_client_request_add_header(http_req, "Content-Type", "application/json");
     }
 
     return http_req;
