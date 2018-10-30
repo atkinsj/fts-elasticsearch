@@ -530,8 +530,10 @@ fts_backend_elasticsearch_update_unset_build_key(struct fts_backend_update_conte
     if (_ctx != NULL) {
         ctx = (struct elasticsearch_fts_backend_update_context *)_ctx;
 
-        /* field is complete, add it to our message. */
-        elasticsearch_add_update_field(ctx->temp, ctx->json_request, ctx->current_field, ctx->temp_body);
+        /* field is complete, add it to our message if not empty. */
+        if (strcmp(str_c(ctx->current_field), "") != 0) {
+            elasticsearch_add_update_field(ctx->temp, ctx->json_request, ctx->current_field, ctx->temp_body);
+        }
 
         /* clean-up our temp */
         str_truncate(ctx->temp_body, 0);
