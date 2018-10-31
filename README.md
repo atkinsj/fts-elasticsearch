@@ -6,8 +6,10 @@ Dovecot communicates to ES using HTTP/JSON queries. It supports automatic indexi
 ## Requirements
 * Dovecot 2.2+
 * JSON-C
-* ElasticSearch 1.0+ for your server
+* ElasticSearch 6.x for your server
 * Autoconf 2.53+
+
+NOTE: You must add `-Des.xcontent.strict_duplicate_detection=false` to your Elasticsearch startup parameters. ES 7.0 will NOT be compatible with this plugin for now since this option will be deprecated.
 
 ## Compiling
 This plugin needs to compile against the Dovecot source for the version you intend to run it on. A dovecot-devel package is unfortunately insufficient as it does not include the required fts API header files. 
