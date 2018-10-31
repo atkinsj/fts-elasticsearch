@@ -721,9 +721,9 @@ fts_backend_elasticsearch_lookup(struct fts_backend *_backend, struct mailbox *b
     /* remove the trailing ',' */
     str_delete(fields, str_len(fields) - 1, 1);
 
-    /* if no fields were added, add _all as our only field */
+    /* if no fields were added, add some sensible default fields */
     if (str_len(fields) == 0) {
-        str_append(fields, "\"_all\"");
+        str_append(fields, "\"from\", \"to\", \"subject\", \"body\"");
     }
 
     /* parse the json */
