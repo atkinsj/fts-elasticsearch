@@ -39,7 +39,7 @@ static const char JSON_SEARCH[] =
                 \"fields\": [ %s ] \
             } \
         }, \
-        \"fields\": [ \"uid\", \"box\" ], \
+        \"_source\": [ \"uid\", \"box\" ], \
         \"size\": %lu \
     }";
 
@@ -52,7 +52,7 @@ static const char JSON_LAST_UID[] =
       \"query\": { \
         \"match_all\": { } \
       }, \
-      \"fields\": [ \
+      \"_source\": [ \
         \"uid\" \
       ], \
       \"size\": 1 \
@@ -446,8 +446,6 @@ fts_backend_elasticsearch_uid_changed(struct fts_backend_update_context *_ctx,
 
     /* chunk up our requests in to reasonable sizes */
     if (ctx->request_size > ELASTICSEARCH_BULK_SIZE) {  
-        /* close the document */
-        fts_backend_elasticsearch_bulk_end(ctx);
 
         /* do an early post */
         elasticsearch_connection_update(backend->elasticsearch_conn,
@@ -532,8 +530,10 @@ fts_backend_elasticsearch_update_unset_build_key(struct fts_backend_update_conte
     if (_ctx != NULL) {
         ctx = (struct elasticsearch_fts_backend_update_context *)_ctx;
 
-        /* field is complete, add it to our message. */
-        elasticsearch_add_update_field(ctx->temp, ctx->json_request, ctx->current_field, ctx->temp_body);
+        /* field is complete, add it to our message if not empty. */
+        if (strcmp(str_c(ctx->current_field), "") != 0) {
+            elasticsearch_add_update_field(ctx->temp, ctx->json_request, ctx->current_field, ctx->temp_body);
+        }
 
         /* clean-up our temp */
         str_truncate(ctx->temp_body, 0);
@@ -721,9 +721,9 @@ fts_backend_elasticsearch_lookup(struct fts_backend *_backend, struct mailbox *b
     /* remove the trailing ',' */
     str_delete(fields, str_len(fields) - 1, 1);
 
-    /* if no fields were added, add _all as our only field */
+    /* if no fields were added, add some sensible default fields */
     if (str_len(fields) == 0) {
-        str_append(fields, "\"_all\"");
+        str_append(fields, "\"from\", \"to\", \"subject\", \"body\"");
     }
 
     /* parse the json */
