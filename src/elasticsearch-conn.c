@@ -84,7 +84,11 @@ int32_t elasticsearch_connection_init(const char *url, bool debug,
     }
 
     conn = i_new(struct elasticsearch_connection, 1);
+#if defined(DOVECOT_PREREQ) && DOVECOT_PREREQ(2,3)
     conn->http_host = i_strdup(http_url->host.name);
+#else
+    conn->http_host = i_strdup(http_url->host_name);
+#endif
     conn->http_port = http_url->port;
     conn->http_base_url = i_strconcat(http_url->path, http_url->enc_query, NULL);
     conn->http_ssl = http_url->have_ssl;
