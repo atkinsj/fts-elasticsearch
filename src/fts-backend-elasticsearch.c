@@ -32,36 +32,36 @@ static const char *es_field_escape_chars = ".#*\"";
 /* the search JSON */
 static const char JSON_SEARCH[] = 
     "{"
-        "\"query\": {"
-            "\"multi_match\": {"
-                "\"query\": \"%s\","
-                "\"operator\": \"%s\","
-                "\"fields\": [%s]"
+        "\"query\":{"
+            "\"multi_match\":{"
+                "\"query\":\"%s\","
+                "\"operator\":\"%s\","
+                "\"fields\":[%s]"
             "}"
         "},"
-        "\"_source\": [\"uid\", \"box\"],"
-        "\"size\": %lu"
+        "\"_source\":[\"uid\",\"box\"],"
+        "\"size\":%lu"
     "}";
 
 /* the last_uid lookup json */
 static const char JSON_LAST_UID[] =
     "{"
-      "\"sort\": {"
-        "\"uid\": \"desc\""
+      "\"sort\":{"
+        "\"uid\":\"desc\""
       "},"
-      "\"query\": {"
-        "\"match_all\": {}"
+      "\"query\":{"
+        "\"match_all\":{}"
       "},"
-      "\"_source\": [\"uid\"],"
-      "\"size\": 1"
+      "\"_source\":[\"uid\"],"
+      "\"size\":1"
     "}";
 
 /* bulk index header */
 static const char JSON_BULK_HEADER[] =
     "{"
-      "\"%s\": {"
-        "\"_index\": \"%s\","
-        "\"_id\": %d"
+      "\"%s\":{"
+        "\"_index\":\"box-%s\","
+        "\"_id\":%d"
       "}"
     "}";
 
@@ -418,7 +418,7 @@ fts_backend_elasticsearch_bulk_start(struct elasticsearch_fts_backend_update_con
         str_truncate(temp, 0);
 
         /* add the first two fields; these are static on every message. */
-        str_printfa(temp, "{ \"uid\": %d, \"box\": \"%s\"", uid, ctx->box_guid);
+        str_printfa(temp, "{\"uid\":%d,\"box\":\"%s\"", uid, ctx->box_guid);
         str_append_str(json_request, temp);
     }
 

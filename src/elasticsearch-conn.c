@@ -454,8 +454,7 @@ int32_t elasticsearch_connection_last_uid(struct elasticsearch_connection *conn,
     conn->post_type = ELASTICSEARCH_POST_TYPE_LAST_UID;
 
     /* build the url */
-    url = t_strconcat(conn->http_base_url, box_guid, NULL);
-    url = t_strconcat(url, "/_search", NULL);
+    url = t_strconcat(conn->http_base_url, "box-", box_guid, "/_search", NULL);
 
     /* perform the actual POST */
     elasticsearch_connection_post(conn, url, query);
@@ -597,8 +596,7 @@ int32_t elasticsearch_connection_select(struct elasticsearch_connection *conn,
     hash_table_create(&lookup_context.mailboxes, default_pool, 0, str_hash, strcmp);
 
     /* build the url */
-    url = t_strconcat(conn->http_base_url, box_guid, NULL);
-    url = t_strconcat(url, "/_search", NULL);
+    url = t_strconcat(conn->http_base_url, "box-", box_guid, "/_search", NULL);
 
     /* perform the actual POST */
     elasticsearch_connection_post(conn, url, query);
