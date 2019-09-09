@@ -31,42 +31,39 @@ static const char *es_field_escape_chars = ".#*\"";
 
 /* the search JSON */
 static const char JSON_SEARCH[] = 
-    "{ \
-        \"query\": { \
-            \"multi_match\": { \
-                \"query\": \"%s\", \
-                \"operator\": \"%s\", \
-                \"fields\": [ %s ] \
-            } \
-        }, \
-        \"_source\": [ \"uid\", \"box\" ], \
-        \"size\": %lu \
-    }";
+    "{"
+        "\"query\": {"
+            "\"multi_match\": {"
+                "\"query\": \"%s\","
+                "\"operator\": \"%s\","
+                "\"fields\": [%s]"
+            "}"
+        "},"
+        "\"_source\": [\"uid\", \"box\"],"
+        "\"size\": %lu"
+    "}";
 
 /* the last_uid lookup json */
 static const char JSON_LAST_UID[] =
-    "{ \
-      \"sort\": { \
-        \"uid\": \"desc\" \
-      }, \
-      \"query\": { \
-        \"match_all\": { } \
-      }, \
-      \"_source\": [ \
-        \"uid\" \
-      ], \
-      \"size\": 1 \
-    }";
+    "{"
+      "\"sort\": {"
+        "\"uid\": \"desc\""
+      "},"
+      "\"query\": {"
+        "\"match_all\": {}"
+      "},"
+      "\"_source\": [\"uid\"],"
+      "\"size\": 1"
+    "}";
 
 /* bulk index header */
 static const char JSON_BULK_HEADER[] =
-    "{ \
-      \"%s\": { \
-        \"_index\": \"%s\", \
-        \"_type\": \"%s\", \
-        \"_id\": %d \
-      } \
-    }";
+    "{"
+      "\"%s\": {"
+        "\"_index\": \"%s\","
+        "\"_id\": %d"
+      "}"
+    "}";
 
 struct elasticsearch_fts_backend {
     struct fts_backend backend;
@@ -411,7 +408,7 @@ fts_backend_elasticsearch_bulk_start(struct elasticsearch_fts_backend_update_con
     ctx->documents_added = TRUE;
 
     /* add the header that starts the bulk transaction */
-    str_printfa(temp, JSON_BULK_HEADER, action_name, ctx->box_guid, "mail", uid);
+    str_printfa(temp, JSON_BULK_HEADER, action_name, ctx->box_guid, uid);
     str_append_str(json_request, temp);
     str_append(json_request, "\n");
 

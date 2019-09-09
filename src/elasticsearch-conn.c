@@ -142,7 +142,7 @@ int32_t elasticsearch_connection_update(struct elasticsearch_connection *conn,
         /* set-up the connection */
         conn->post_type = ELASTICSEARCH_POST_TYPE_UPDATE;
 
-        url = t_strconcat(conn->http_base_url, "/_bulk/", NULL);
+        url = t_strconcat(conn->http_base_url, "/_bulk", NULL);
 
         elasticsearch_connection_post(conn, url, cmd);
 
@@ -455,7 +455,7 @@ int32_t elasticsearch_connection_last_uid(struct elasticsearch_connection *conn,
 
     /* build the url */
     url = t_strconcat(conn->http_base_url, box_guid, NULL);
-    url = t_strconcat(url, "/mail/_search/", NULL);
+    url = t_strconcat(url, "/_search", NULL);
 
     /* perform the actual POST */
     elasticsearch_connection_post(conn, url, query);
@@ -556,7 +556,7 @@ int32_t elasticsearch_connection_refresh(struct elasticsearch_connection *conn)
     /* build the url; we don't have any choice but to refresh the entire 
      * ES server here because Dovecot's refresh API doesn't give us the
      * mailbox that is being refreshed. */
-    url = t_strconcat(conn->http_base_url, "/_refresh/", NULL);
+    url = t_strconcat(conn->http_base_url, "/_refresh", NULL);
 
     /* perform the actual POST */
     elasticsearch_connection_post(conn, url, "");
@@ -598,7 +598,7 @@ int32_t elasticsearch_connection_select(struct elasticsearch_connection *conn,
 
     /* build the url */
     url = t_strconcat(conn->http_base_url, box_guid, NULL);
-    url = t_strconcat(url, "/mail/_search/", NULL);
+    url = t_strconcat(url, "/_search", NULL);
 
     /* perform the actual POST */
     elasticsearch_connection_post(conn, url, query);
