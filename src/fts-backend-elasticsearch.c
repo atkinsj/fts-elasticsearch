@@ -39,7 +39,7 @@ static const char JSON_SEARCH[] =
                 "\"fields\":[%s]"
             "}"
         "},"
-        "\"_source\":[\"uid\",\"box\"],"
+        // "\"_source\":[\"uid\",\"box\"],"
         "\"size\":%lu"
     "}";
 
@@ -52,7 +52,7 @@ static const char JSON_LAST_UID[] =
       "\"query\":{"
         "\"match_all\":{}"
       "},"
-      "\"_source\":[\"uid\"],"
+    //   "\"_source\":[\"uid\"],"
       "\"size\":1"
     "}";
 
@@ -174,7 +174,7 @@ fts_backend_elasticsearch_init(struct fts_backend *_backend,
     if (_backend != NULL) {
         backend = (struct elasticsearch_fts_backend *)_backend;
     } else {
-        *error_r = "fts_elasticsearch: error during backend initilisation";
+        *error_r = "fts_elasticsearch: error during backend initialisation";
 
         return -1;
     }
@@ -557,7 +557,8 @@ static int fts_backend_elasticsearch_refresh(struct fts_backend *_backend)
     struct elasticsearch_fts_backend *backend =
         (struct elasticsearch_fts_backend *)_backend;
 
-    elasticsearch_connection_refresh(backend->elasticsearch_conn);
+    // we dont need to search new messages immediately
+    // elasticsearch_connection_refresh(backend->elasticsearch_conn);
 
     return 0;
 }
@@ -720,7 +721,7 @@ fts_backend_elasticsearch_lookup(struct fts_backend *_backend, struct mailbox *b
 
     /* if no fields were added, add some sensible default fields */
     if (str_len(fields) == 0) {
-        str_append(fields, "\"from\", \"to\", \"subject\", \"body\"");
+        str_append(fields, "\"from\",\"to\",\"subject\",\"body\"");
     }
 
     /* parse the json */

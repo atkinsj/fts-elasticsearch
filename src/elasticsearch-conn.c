@@ -251,13 +251,8 @@ void elasticsearch_connection_last_uid_json(struct elasticsearch_connection *con
 
     if (conn != NULL && key != NULL && val != NULL) {
         /* only interested in the uid field */
-        if (strcmp(key, "uid") == 0) {
-            if (json_object_get_type(val) == json_type_array) {
-                jvalue = json_object_array_get_idx(val, 0);
-            } else {
-                jvalue = val;
-            }
-            conn->ctx->uid = json_object_get_int(jvalue);
+        if (strcmp(key, "_id") == 0) {
+            conn->ctx->uid = json_object_get_int(val);
         }
     } else {
         i_error("fts_elasticsearch: last_uid_json: critical error while getting last uid");
@@ -270,29 +265,22 @@ void elasticsearch_connection_select_json(struct elasticsearch_connection *conn,
     json_object *jvalue;
     struct elasticsearch_result *result = NULL;
     struct fts_score_map *tmp_score = NULL;
+    const char *box_guid;
 
     if (conn != NULL) {
         /* ensure a key and val exist before trying to process them */
         if (key != NULL && val != NULL) {
-            if (strcmp(key, "uid") == 0) {
-                if (json_object_get_type(val) == json_type_array) {
-                    jvalue = json_object_array_get_idx(val, 0);
-                } else {
-                    jvalue = val;
-                }
-                conn->ctx->uid = json_object_get_int(jvalue);
+            if (strcmp(key, "_id") == 0) {
+                conn->ctx->uid = json_object_get_int(val);
             }
-
-            if (strcmp(key, "_score") == 0)
+            if (strcmp(key, "_score") == 0) {
                 conn->ctx->score = json_object_get_double(val);  
-
-            if (strcmp(key, "box") == 0) {
-                if (json_object_get_type(val) == json_type_array) {
-                    jvalue = json_object_array_get_idx(val, 0);
-                } else {
-                    jvalue = val;
+            }
+            if (strcmp(key, "_index") == 0) {
+                box_guid = json_object_get_string(val);
+                if (strncmp(box_guid, "box-", 4) == 0) {
+                    conn->ctx->box_guid = box_guid + 4;
                 }
-                conn->ctx->box_guid = json_object_get_string(jvalue);
             }
         }
 
@@ -331,7 +319,7 @@ void json_parse(json_object *jobj, struct elasticsearch_connection *conn)
         switch (conn->post_type) {
         case ELASTICSEARCH_POST_TYPE_LAST_UID:
             /* we only care about the uid field */
-            if (strcmp(key, "uid") == 0) {
+            if (strcmp(key, "_id") == 0) {
                 elasticsearch_connection_last_uid_json(conn, key, val);
             }
 

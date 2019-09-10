@@ -41,7 +41,11 @@ There are only two supported configuration parameters at the moment:
 * debug Enables HTTP debugging
 
 ## ElasticSearch Indicies
-fts-elasticsearch creates an index per mail box with a hardcoded type of 'mail'. It creates one field for each field in the e-mail header and for the body.
+fts-elasticsearch creates an index per mail box. It creates one field for each field in the e-mail header and for the body.
+
+You can setup index template on Elasticsearch with command
+
+	curl -X PUT "http://elasticIP:9200/_template/box?pretty" -H 'Content-Type: application/json' -d "@index-template-schema.json"
 
 An example of pushed data for a basic e-mail with no attachments:
 
