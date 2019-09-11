@@ -247,8 +247,6 @@ elasticsearch_result_get(struct elasticsearch_connection *conn, const char *box_
 void elasticsearch_connection_last_uid_json(struct elasticsearch_connection *conn,
                                             char *key, struct json_object *val)
 {
-    json_object *jvalue = NULL;
-
     if (conn != NULL && key != NULL && val != NULL) {
         /* only interested in the uid field */
         if (strcmp(key, "_id") == 0) {
@@ -262,7 +260,6 @@ void elasticsearch_connection_last_uid_json(struct elasticsearch_connection *con
 void elasticsearch_connection_select_json(struct elasticsearch_connection *conn,
                                           char *key, struct json_object *val)
 {
-    json_object *jvalue;
     struct elasticsearch_result *result = NULL;
     struct fts_score_map *tmp_score = NULL;
     const char *box_guid;
@@ -420,6 +417,7 @@ static void elasticsearch_connection_payload_input(struct elasticsearch_connecti
         str_free(&conn->ctx->email);
         io_remove(&conn->io);
         i_stream_unref(&conn->payload);
+        i_stream_destroy(&conn->payload);
     }
 }
 
@@ -482,7 +480,7 @@ elasticsearch_connection_select_response(const struct http_response *response,
      * as they are causing I/O leaks. */
     i_stream_ref(response->payload);
     conn->payload = response->payload;
-    conn->ctx->email = str_new(default_pool, 1024 * 1024); /* 1Mb */
+    conn->ctx->email = str_new(default_pool, 1024 * 1024); /* 1 MB */
     conn->io = io_add_istream(response->payload, elasticsearch_connection_payload_input, conn);
     elasticsearch_connection_payload_input(conn);
 }
