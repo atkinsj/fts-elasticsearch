@@ -30,17 +30,13 @@ static const char *es_update_escape_chars = "\"\\";
 static const char *es_field_escape_chars = ".#*\"";
 
 /* the search JSON */
-static const char JSON_SEARCH[] = 
-    "{"
-        "\"query\":{"
-            "\"multi_match\":{"
-                "\"query\":\"%s\","
-                "\"operator\":\"%s\","
-                "\"fields\":[%s]"
-            "}"
-        "},"
-        // "\"_source\":[\"uid\",\"box\"],"
-        "\"size\":%lu"
+static const char JSON_BOOL_MULTI_MATCH[] = 
+    "\"%s\":{"
+        "\"multi_match\":{"
+            "\"query\":\"%s\","
+            "\"operator\":\"%s\","
+            "\"fields\":[%s]"
+        "}"
     "}";
 
 /* the last_uid lookup json */
@@ -52,7 +48,6 @@ static const char JSON_LAST_UID[] =
       "\"query\":{"
         "\"match_all\":{}"
       "},"
-    //   "\"_source\":[\"uid\"],"
       "\"size\":1"
     "}";
 
@@ -619,14 +614,22 @@ static int fts_backend_elasticsearch_optimize(struct fts_backend *backend ATTR_U
 }
 
 static bool
-elasticsearch_add_definite_query(struct mail_search_arg *arg, string_t *value,
-                                 string_t *fields)
+elasticsearch_add_definite_query(string_t *_fields, string_t *_fields_not,
+                                 string_t *value, struct mail_search_arg *arg)
 {
+    string_t *fields = NULL;
+
     /* validate our input */
-    if (arg == NULL || value == NULL || fields == NULL) {
+    if (_fields == NULL || _fields_not == NULL || value == NULL || arg == NULL) {
         i_error("fts_elasticsearch: critical error while building query");
 
         return FALSE;
+    }
+
+    if (arg->match_not) {
+        fields = _fields_not;
+    } else {
+        fields = _fields;
     }
 
     switch (arg->type) {
@@ -669,8 +672,8 @@ elasticsearch_add_definite_query(struct mail_search_arg *arg, string_t *value,
 }
 
 static bool
-elasticsearch_add_definite_query_args(string_t *fields, string_t *value,
-                                      struct mail_search_arg *arg)
+elasticsearch_add_definite_query_args(string_t *fields, string_t *fields_not,
+                                      string_t *value, struct mail_search_arg *arg)
 {
     bool field_added = FALSE;
 
@@ -683,11 +686,11 @@ elasticsearch_add_definite_query_args(string_t *fields, string_t *value,
     for (; arg != NULL; arg = arg->next) {
         /* multiple fields have an initial arg of nothing useful and subargs */
         if (arg->value.subargs != NULL) {
-            field_added = elasticsearch_add_definite_query_args(fields, value,
+            field_added = elasticsearch_add_definite_query_args(fields, fields_not, value,
                 arg->value.subargs);
         }
 
-        if (elasticsearch_add_definite_query(arg, value, fields)) {
+        if (elasticsearch_add_definite_query(fields, fields_not, value, arg)) {
             /* the value is the same for every arg passed, only add the value
              * to our search json once. */
             if (!field_added) {
@@ -729,6 +732,7 @@ fts_backend_elasticsearch_lookup(struct fts_backend *_backend, struct mailbox *b
     string_t *str = str_new(pool, 1024);
     string_t *query = str_new(pool, 1024);
     string_t *fields = str_new(pool, 1024);
+    string_t *fields_not = str_new(pool, 1024);
 
     /* validate our input */
     if (_backend == NULL || box == NULL || args == NULL || result == NULL) {
@@ -757,22 +761,30 @@ fts_backend_elasticsearch_lookup(struct fts_backend *_backend, struct mailbox *b
     }
 
     /* attempt to build the query */
-    if (!elasticsearch_add_definite_query_args(fields, query, args)) {
+    if (!elasticsearch_add_definite_query_args(fields, fields_not, query, args)) {
         return -1;
     }
 
     /* remove the trailing ',' */
     str_delete(fields, str_len(fields) - 1, 1);
+    str_delete(fields_not, str_len(fields_not) - 1, 1);
 
     /* if no fields were added, add some sensible default fields */
-    if (str_len(fields) == 0) {
+    if (str_len(fields) == 0 && str_len(fields_not) == 0) {
         str_append(fields, "\"from\",\"to\",\"cc\",\"bcc\",\"sender\",\"subject\",\"body\"");
     }
 
-    /* parse the json */
-    str_printfa(str, JSON_SEARCH, str_c(query),
-                and_args == 1 ? "and" : "or", str_c(fields), num_rows);
-    
+    /* generate json search query */
+    str_append(str, "{\"query\": {\"bool\": {");
+    if (str_len(fields) > 0) {
+        str_printfa(str, JSON_BOOL_MULTI_MATCH, "must", str_c(query), and_args == 1 ? "and" : "or", str_c(fields));
+    }
+    if (str_len(fields_not) > 0) {
+        str_append(str, ",");
+        str_printfa(str, JSON_BOOL_MULTI_MATCH, "must_not", str_c(query), and_args == 1 ? "and" : "or", str_c(fields_not));
+    }
+    str_printfa(str, "}}, \"size\":%lu}", num_rows);
+
     ret = elasticsearch_connection_select(backend->elasticsearch_conn, pool,
                                           str_c(str), box_guid, &es_results);
 
