@@ -6,6 +6,7 @@
 #include "fts-api.h"
 #include <json-c/json.h>
 
+struct fts_elasticsearch_settings;
 struct elasticsearch_connection;
 
 enum elasticsearch_post_type {
@@ -22,9 +23,9 @@ struct elasticsearch_result {
     ARRAY_TYPE(fts_score_map) scores;
 };
 
-int32_t elasticsearch_connection_init(const char *url, bool debug,
-                                  struct elasticsearch_connection **conn_r,
-                                  const char **error_r);
+int elasticsearch_connection_init(const struct fts_elasticsearch_settings *set,
+                                      struct elasticsearch_connection **conn_r,
+                                      const char **error_r);
 
 void elasticsearch_connection_deinit(struct elasticsearch_connection *conn);
 

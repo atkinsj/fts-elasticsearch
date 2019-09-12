@@ -17,9 +17,6 @@
 #include "fts-elasticsearch-plugin.h"
 #include "elasticsearch-conn.h"
 
-/* default bulk index size of 5MB */
-#define ELASTICSEARCH_BULK_SIZE 5000000
-
 /* values that must be escaped in query fields */
 static const char *es_query_escape_chars = "\"\\";
 
@@ -173,22 +170,18 @@ fts_backend_elasticsearch_init(struct fts_backend *_backend,
     /* ensure our backend is provided */
     if (_backend != NULL) {
         backend = (struct elasticsearch_fts_backend *)_backend;
+        fuser = FTS_ELASTICSEARCH_USER_CONTEXT(_backend->ns->user);
     } else {
         *error_r = "fts_elasticsearch: error during backend initialisation";
-
         return -1;
     }
-    
-    fuser = FTS_ELASTICSEARCH_USER_CONTEXT(_backend->ns->user);
 
     if (fuser == NULL) {
         *error_r = "Invalid fts_elasticsearch setting";
-
         return -1;
     }
 
-    return elasticsearch_connection_init(fuser->set.url, fuser->set.debug,
-                                         &backend->elasticsearch_conn, error_r);
+    return elasticsearch_connection_init(&fuser->set, &backend->elasticsearch_conn, error_r);
 }
 
 static void
@@ -440,6 +433,8 @@ fts_backend_elasticsearch_bulk_start(struct elasticsearch_fts_backend_update_con
     /* expunges don't need anything more than the action line */
     if (!ctx->expunges) {
         /* add the first two fields; these are static on every message. */
+        /* TODO: add user to fields, when there will be ability to index messages
+         * from more users in one index*/
         str_printfa(json_request, "{\"uid\":%d,\"box\":\"%s\"", uid, ctx->box_guid);
     }
 }
@@ -451,7 +446,9 @@ fts_backend_elasticsearch_uid_changed(struct fts_backend_update_context *_ctx,
     struct elasticsearch_fts_backend_update_context *ctx =
         (struct elasticsearch_fts_backend_update_context *)_ctx;
     struct elasticsearch_fts_backend *backend =
-            (struct elasticsearch_fts_backend *)_ctx->backend;
+        (struct elasticsearch_fts_backend *)_ctx->backend;
+	struct fts_elasticsearch_user *fuser =
+        FTS_ELASTICSEARCH_USER_CONTEXT(_ctx->backend->ns->user);
 
     if (ctx->documents_added) {
         /* this is the end of an old message. nb: the last message to be indexed
@@ -460,7 +457,7 @@ fts_backend_elasticsearch_uid_changed(struct fts_backend_update_context *_ctx,
     }
 
     /* chunk up our requests in to reasonable sizes */
-    if (ctx->request_size > ELASTICSEARCH_BULK_SIZE) {  
+    if (ctx->request_size > fuser->set.bulk_size) {  
         /* do an early post */
         elasticsearch_connection_update(backend->elasticsearch_conn,
                                         str_c(ctx->json_request));
@@ -485,7 +482,8 @@ static const char *wanted_headers[] = {
     "Message-ID",
 };
 
-bool fts_backend_elasticsearch_header_want(const char *hdr_name)
+static bool
+fts_backend_elasticsearch_header_want(const char *hdr_name)
 {
 	unsigned int i;
 
@@ -594,12 +592,14 @@ fts_backend_elasticsearch_update_expunge(struct fts_backend_update_context *_ctx
 
 static int fts_backend_elasticsearch_refresh(struct fts_backend *_backend)
 {
-    /* uncomment if need to search new messages immediately
     struct elasticsearch_fts_backend *backend =
         (struct elasticsearch_fts_backend *)_backend;
+	struct fts_elasticsearch_user *fuser =
+        FTS_ELASTICSEARCH_USER_CONTEXT(_backend->ns->user);
 
-    elasticsearch_connection_refresh(backend->elasticsearch_conn);
-    */
+    if (fuser->set.refresh_by_fts) {
+        elasticsearch_connection_refresh(backend->elasticsearch_conn);
+    }
     return 0;
 }
 
@@ -777,11 +777,13 @@ fts_backend_elasticsearch_lookup(struct fts_backend *_backend, struct mailbox *b
     /* generate json search query */
     str_append(str, "{\"query\": {\"bool\": {");
     if (str_len(fields) > 0) {
-        str_printfa(str, JSON_BOOL_MULTI_MATCH, "must", str_c(query), and_args == 1 ? "and" : "or", str_c(fields));
+        str_printfa(str, JSON_BOOL_MULTI_MATCH, "must", str_c(query), and_args ? "and" : "or", str_c(fields));
+        if (str_len(fields_not) > 0) {
+            str_append(str, ",");
+        }
     }
     if (str_len(fields_not) > 0) {
-        str_append(str, ",");
-        str_printfa(str, JSON_BOOL_MULTI_MATCH, "must_not", str_c(query), and_args == 1 ? "and" : "or", str_c(fields_not));
+        str_printfa(str, JSON_BOOL_MULTI_MATCH, "must_not", str_c(query), and_args ? "and" : "or", str_c(fields_not));
     }
     str_printfa(str, "}}, \"size\":%lu}", num_rows);
 

@@ -10,10 +10,13 @@
 #include "istream.h"
 #include "http-url.h"
 #include "http-client.h"
+#include "fts-elasticsearch-plugin.h"
 #include "elasticsearch-conn.h"
 
 #include <json-c/json.h>
 #include <stdio.h>
+
+#define ES_INDEX_PREFIX "box-"
 
 struct http_client *elasticsearch_http_client = NULL;
 
@@ -56,11 +59,13 @@ struct elasticsearch_connection {
     /* context for the current lookup */
     struct elasticsearch_lookup_context *ctx;
 
+    /* if we should send ?refresh=true to elastic */
+    bool refresh_on_update;
     unsigned int debug:1;
     unsigned int http_ssl:1;
 };
 
-int32_t elasticsearch_connection_init(const char *url, bool debug,
+int elasticsearch_connection_init(const struct fts_elasticsearch_settings *set,
                                       struct elasticsearch_connection **conn_r,
                                       const char **error_r)
 {
@@ -69,13 +74,13 @@ int32_t elasticsearch_connection_init(const char *url, bool debug,
     struct http_url *http_url = NULL;
     const char *error = NULL;
 
-    if (error_r == NULL || url == NULL || conn_r == NULL) {
+    if (error_r == NULL || set == NULL || conn_r == NULL) {
         i_debug("fts_elasticsearch: error initialising ElasticSearch connection");
         return -1;
     }
 
     /* validate the url */
-    if (http_url_parse(url, NULL, 0, pool_datastack_create(),
+    if (http_url_parse(set->url, NULL, 0, pool_datastack_create(),
                &http_url, &error) < 0) {
         *error_r = t_strdup_printf(
             "fts_elasticsearch: Failed to parse HTTP url: %s", error);
@@ -92,7 +97,8 @@ int32_t elasticsearch_connection_init(const char *url, bool debug,
     conn->http_port = http_url->port;
     conn->http_base_url = i_strconcat(http_url->path, http_url->enc_query, NULL);
     conn->http_ssl = http_url->have_ssl;
-    conn->debug = debug;
+    conn->debug = set->debug;
+    conn->refresh_on_update = set->refresh_on_update;
 
     /* guard against init being called multiple times */
     if (elasticsearch_http_client == NULL) {
@@ -102,7 +108,8 @@ int32_t elasticsearch_connection_init(const char *url, bool debug,
         http_set.max_pipelined_requests = 1;
         http_set.max_redirects = 1;
         http_set.max_attempts = 3;
-        http_set.debug = debug;
+        http_set.debug = set->debug;
+		http_set.rawlog_dir = set->rawlog_dir;
         elasticsearch_http_client = http_client_init(&http_set);
     }
 
@@ -275,7 +282,7 @@ void elasticsearch_connection_select_json(struct elasticsearch_connection *conn,
             }
             if (strcmp(key, "_index") == 0) {
                 box_guid = json_object_get_string(val);
-                if (strncmp(box_guid, "box-", 4) == 0) {
+                if (strncmp(box_guid, ES_INDEX_PREFIX, 4) == 0) {
                     conn->ctx->box_guid = box_guid + 4;
                 }
             }
@@ -440,7 +447,7 @@ int32_t elasticsearch_connection_last_uid(struct elasticsearch_connection *conn,
     conn->post_type = ELASTICSEARCH_POST_TYPE_LAST_UID;
 
     /* build the url */
-    url = t_strconcat(conn->http_base_url, "box-", box_guid, "/_search", NULL);
+    url = t_strconcat(conn->http_base_url, ES_INDEX_PREFIX, box_guid, "/_search", NULL);
 
     /* perform the actual POST */
     elasticsearch_connection_post(conn, url, query);
@@ -582,7 +589,7 @@ int32_t elasticsearch_connection_select(struct elasticsearch_connection *conn,
     hash_table_create(&lookup_context.mailboxes, default_pool, 0, str_hash, strcmp);
 
     /* build the url */
-    url = t_strconcat(conn->http_base_url, "box-", box_guid, "/_search", NULL);
+    url = t_strconcat(conn->http_base_url, ES_INDEX_PREFIX, box_guid, "/_search", NULL);
 
     /* perform the actual POST */
     elasticsearch_connection_post(conn, url, query);

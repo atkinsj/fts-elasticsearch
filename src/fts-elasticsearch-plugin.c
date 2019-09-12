@@ -30,11 +30,34 @@ static int fts_elasticsearch_plugin_init_settings(struct mail_user *user,
         str = "";
     }
 
+    set->bulk_size = 5000000;
+    set->refresh_by_fts = TRUE;
+    set->refresh_on_update = FALSE;
+
     for (tmp = t_strsplit_spaces(str, " "); *tmp != NULL; tmp++) {
         if (strncmp(*tmp, "url=", 4) == 0) {
             set->url = p_strdup(user->pool, *tmp + 4);
         } else if (strcmp(*tmp, "debug") == 0) {
             set->debug = TRUE;
+		} else if (str_begins(*tmp, "rawlog_dir=")) {
+			set->rawlog_dir = p_strdup(user->pool, *tmp + 11);
+		} else if (str_begins(*tmp, "bulk_size=")) {
+			if (str_to_uint(*tmp+11, &set->bulk_size) < 0 || set->bulk_size == 0) {
+				i_error("fts_elasticsearch: bulk_size must be a positive integer");
+                return -1;
+			}
+		} else if (str_begins(*tmp, "refresh=")) {
+			if (strcmp(*tmp + 8, "never") == 0) {
+				set->refresh_on_update = FALSE;
+				set->refresh_by_fts = FALSE;
+			} else if (strcmp(*tmp + 8, "update") == 0) {
+				set->refresh_on_update = TRUE;
+			} else if (strcmp(*tmp + 8, "fts") == 0) {
+				set->refresh_by_fts = TRUE;
+			} else {
+				i_error("fts_elasticsearch: Invalid setting for refresh: %s", *tmp+8);
+				return -1;
+			}
         } else {
             i_error("fts_elasticsearch: Invalid setting: %s", *tmp);
             return -1;
