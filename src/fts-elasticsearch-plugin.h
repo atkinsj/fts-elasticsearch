@@ -25,6 +25,7 @@ struct fts_elasticsearch_user {
 extern const char *fts_elasticsearch_plugin_dependencies[];
 extern struct fts_backend fts_backend_elasticsearch;
 extern MODULE_CONTEXT_DEFINE(fts_elasticsearch_user_module, &mail_user_module_register);
+extern struct http_client *elasticsearch_http_client;
 
 void fts_elasticsearch_plugin_init(struct module *module);
 void fts_elasticsearch_plugin_deinit(void);

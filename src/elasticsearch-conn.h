@@ -30,11 +30,11 @@ int elasticsearch_connection_init(const struct fts_elasticsearch_settings *set,
 void elasticsearch_connection_deinit(struct elasticsearch_connection *conn);
 
 
-int32_t elasticsearch_connection_update(struct elasticsearch_connection *conn,
-                                    const char *cmd);
+int elasticsearch_connection_update(struct elasticsearch_connection *conn,
+                                        string_t *cmd);
 
-int32_t elasticsearch_connection_post(struct elasticsearch_connection *conn,
-                                  const char *url, const char *cmd);
+int elasticsearch_connection_post(struct elasticsearch_connection *conn,
+                                  const char *url, string_t *cmd);
 
 void json_parse_array(json_object *jobj, char *key,
                       struct elasticsearch_connection *conn);
@@ -46,11 +46,11 @@ void elasticsearch_connection_select_json(struct elasticsearch_connection *conn,
                                           char *key, struct json_object *val);
 
 
-void json_parse(json_object * jobj, struct elasticsearch_connection *conn);
+void jobj_parse(struct elasticsearch_connection *conn, json_object *jobj);
 
 
 int32_t elasticsearch_connection_last_uid(struct elasticsearch_connection *conn,
-                                           const char *query, const char *box_guid);
+                                      string_t *query, const char *box_guid);
 
 struct http_client_request*
 elasticsearch_connection_http_request(struct elasticsearch_connection *conn,
@@ -59,6 +59,6 @@ elasticsearch_connection_http_request(struct elasticsearch_connection *conn,
 int32_t elasticsearch_connection_refresh(struct elasticsearch_connection *conn);
 
 int32_t elasticsearch_connection_select(struct elasticsearch_connection *conn, pool_t pool,
-    const char *query, const char *box, struct elasticsearch_result ***box_results_r);
+    string_t *query, const char *box, struct elasticsearch_result ***box_results_r);
 
 #endif

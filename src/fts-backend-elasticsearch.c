@@ -150,6 +150,15 @@ static const char *es_query_escape(const char *str)
     return es_escape(str, es_query_escape_chars);
 }
 
+static void str_append_message_id(string_t *str, uint32_t uid, 
+                                  struct elasticsearch_fts_backend_update_context *ctx)
+{
+	str_printfa(str, "%u/%s", uid, ctx->box_guid);
+	if (ctx->ctx.backend->ns->owner != NULL) {
+		str_printfa(str, "/%s", ctx->ctx.backend->ns->owner->username);
+	}
+}
+
 static struct fts_backend *fts_backend_elasticsearch_alloc(void)
 {
     struct elasticsearch_fts_backend *backend;
@@ -233,6 +242,7 @@ fts_backend_elasticsearch_get_last_uid(struct fts_backend *_backend,
     struct fts_index_header hdr;
     struct elasticsearch_fts_backend *backend = NULL;
     const char *box_guid = NULL;
+    string_t *cmd = t_str_new_const(JSON_LAST_UID, sizeof(JSON_LAST_UID));
     int32_t ret;
 
     /* ensure our backend has been initialised */
@@ -259,32 +269,25 @@ fts_backend_elasticsearch_get_last_uid(struct fts_backend *_backend,
      **/
     if (fts_index_get_header(box, &hdr)) {
         *last_uid_r = hdr.last_indexed_uid;
-
         return 0;
     } 
 
     if (fts_mailbox_get_guid(box, &box_guid) < 0) {
         i_error("fts-elasticsearch: get_last_uid: failed to get mbox guid");
-
         return -1;
     }
 
     /* call ES */
-    ret = elasticsearch_connection_last_uid(backend->elasticsearch_conn,
-        JSON_LAST_UID, box_guid);
+    ret = elasticsearch_connection_last_uid(backend->elasticsearch_conn, cmd, box_guid);
 
     if (ret > 0) {
         *last_uid_r = ret;
-
         fts_index_set_last_uid(box, *last_uid_r);
-
         return 0;
     }
     
     *last_uid_r = 0;
-
     fts_index_set_last_uid(box, *last_uid_r);
-
     return 0;
 }
 
@@ -342,8 +345,7 @@ fts_backend_elasticsearch_update_deinit(struct fts_backend_update_context *_ctx)
     }
 
     /* perform the actual post */
-    elasticsearch_connection_update(backend->elasticsearch_conn,
-                                    str_c(ctx->json_request));
+    elasticsearch_connection_update(backend->elasticsearch_conn, ctx->json_request);
 
     /* global clean-up */
     str_free(&ctx->json_request); 
@@ -459,8 +461,7 @@ fts_backend_elasticsearch_uid_changed(struct fts_backend_update_context *_ctx,
     /* chunk up our requests in to reasonable sizes */
     if (ctx->request_size > fuser->set.bulk_size) {  
         /* do an early post */
-        elasticsearch_connection_update(backend->elasticsearch_conn,
-                                        str_c(ctx->json_request));
+        elasticsearch_connection_update(backend->elasticsearch_conn, ctx->json_request);
 
         /* reset our tracking variables */
         str_truncate(ctx->json_request, 0);
@@ -788,7 +789,7 @@ fts_backend_elasticsearch_lookup(struct fts_backend *_backend, struct mailbox *b
     str_printfa(str, "}}, \"size\":%lu}", num_rows);
 
     ret = elasticsearch_connection_select(backend->elasticsearch_conn, pool,
-                                          str_c(str), box_guid, &es_results);
+                                          str, box_guid, &es_results);
 
     /* build our fts_result return */
     result->box = box;

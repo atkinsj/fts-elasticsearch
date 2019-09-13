@@ -3,6 +3,7 @@
 
 #include "lib.h"
 #include "array.h"
+#include "http-client.h"
 #include "mail-user.h"
 #include "mail-storage-hooks.h"
 #include "fts-elasticsearch-plugin.h"
@@ -10,6 +11,7 @@
 #include <stdlib.h>
 
 const char *fts_elasticsearch_plugin_version = DOVECOT_ABI_VERSION;
+struct http_client *elasticsearch_http_client = NULL;
 
 struct fts_elasticsearch_user_module fts_elasticsearch_user_module =
     MODULE_CONTEXT_INIT(&mail_user_module_register);
@@ -116,6 +118,8 @@ void fts_elasticsearch_plugin_deinit(void)
 {
     fts_backend_unregister(fts_backend_elasticsearch.name);
     mail_storage_hooks_remove(&fts_elasticsearch_mail_storage_hooks);
+    if (elasticsearch_http_client != NULL)
+		http_client_deinit(&elasticsearch_http_client);
 }
 
 const char *fts_elasticsearch_plugin_dependencies[] = { "fts", NULL };
