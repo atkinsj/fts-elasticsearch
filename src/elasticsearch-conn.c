@@ -360,12 +360,9 @@ static int elasticsearch_json_parse(struct elasticsearch_connection *conn,
         return -1;
     }
 
+    i_assert(conn->tok != NULL);
     /* feed new json to tokener */
     jobj = json_tokener_parse_ex(conn->tok, (const char *)data, size);
-
-    if (conn->tok->char_offset < size) {
-        i_error("fts-elastic: char_offset<size: '%s'", data + conn->tok->char_offset);
-    }
 
     if (jobj == NULL) {
         jerr = json_tokener_get_error(conn->tok);
@@ -373,10 +370,10 @@ static int elasticsearch_json_parse(struct elasticsearch_connection *conn,
             i_error("fts-elasticsearch: json error: %s", json_tokener_error_desc(jerr));
             return -1;
         }
+    } else {
+        /* extract values from resulting json object */
+        jobj_parse(conn, jobj);
     }
-
-    /* extract values from resulting json object */
-    jobj_parse(conn, jobj);
 
     return 0;
 }
@@ -464,8 +461,6 @@ elasticsearch_connection_select_response(const struct http_response *response,
         return;
     }
 
-    /* TODO: read up in the dovecot source to see how we should clean these up
-     * as they are causing I/O leaks. */
     i_stream_ref(response->payload);
     conn->payload = response->payload;
     conn->io = io_add_istream(response->payload,
