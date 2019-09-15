@@ -2,7 +2,7 @@
 # Process this file with autoconf to produce a configure script.
 
 AC_PREREQ([2.53])
-AC_INIT([fts-elasticsearch], [0.1.0], [https://github.com/ascendantcom/fts-elasticsearch])
+AC_INIT([fts-elastic], [0.1.0], [https://github.com/ascendantcom/fts-elastic])
 AM_INIT_AUTOMAKE([no-define foreign tar-ustar])
 AC_OUTPUT(Makefile src/Makefile)
 AC_CONFIG_SRCDIR([src])
@@ -11,10 +11,10 @@ AC_CONFIG_HEADERS([dummy-config.h])
 AM_MAINTAINER_MODE
 
 # Don't clobber Dovecot package versions
-AC_DEFINE_UNQUOTED(FTS_ELASTICSEARCH_NAME, "$PACKAGE_NAME",
-        [Define to the full name of fts-elasticsearch for Dovecot.])
-AC_DEFINE_UNQUOTED(FTS_ELASTICSEARCH_VERSION, "$PACKAGE_VERSION",
-        [Define to the version of fts-elasticsearch for Dovecot.])
+AC_DEFINE_UNQUOTED(fts_elastic_NAME, "$PACKAGE_NAME",
+        [Define to the full name of fts-elastic for Dovecot.])
+AC_DEFINE_UNQUOTED(fts_elastic_VERSION, "$PACKAGE_VERSION",
+        [Define to the version of fts-elastic for Dovecot.])
 
 # Couple with Dovecot
 #
