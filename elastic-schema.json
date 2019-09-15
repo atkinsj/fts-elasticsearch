@@ -1,14 +1,13 @@
 {
-    "index_patterns": ["box-*"],
+    "index_patterns": ["m*"],
     "settings": {
       "number_of_shards": 1,
       "number_of_replicas": 0
     },
     "mappings": {
       "_source": {
-        "enabled": false
+        "enabled": true
       },
-      "dynamic_date_formats": ["EEE, d LLL yyyy HH:mm:ss Z||yyyy-MM-dd HH:mm:ss||yyyy-MM-dd"],
       "properties": {
         "user":   {"type": "keyword"},
         "box":    {"type": "keyword"},

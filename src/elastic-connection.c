@@ -16,8 +16,6 @@
 #include <json-c/json.h>
 #include <stdio.h>
 
-#define ES_INDEX_PREFIX "box-"
-
 struct elastic_lookup_context {
     pool_t result_pool;
 
@@ -146,7 +144,7 @@ int elastic_connection_update(struct elastic_connection *conn,
     if (conn != NULL && cmd != NULL) {
         /* set-up the connection */
         conn->post_type = ELASTIC_POST_TYPE_UPDATE;
-        url = t_strconcat(conn->http_base_url, "/_bulk", NULL);
+        url = t_strconcat(conn->http_base_url, "_bulk", NULL);
         elastic_connection_post(conn, url, cmd);
         return conn->request_status;
     } else {
@@ -180,39 +178,6 @@ int elastic_connection_post(struct elastic_connection *conn,
     return conn->request_status;
 }
 
-void json_parse_array(json_object *jobj, char *key, struct elastic_connection *conn)
-{
-    enum json_type type;
-    json_object *jvalue = NULL, *jarray = NULL;;
-    size_t arraylen;
-    size_t i;
-
-    /* first array is our entry object */
-    jarray = jobj; 
-
-    if (key) {
-        jarray = json_object_object_get(jobj, key);
-    }
-
-    arraylen = json_object_array_length(jarray);
-
-    /* iterate over the array and walk the tree */
-    for (i = 0; i < arraylen; i++) {
-        jvalue = json_object_array_get_idx(jarray, i);
-        type = json_object_get_type(jvalue);
-
-        /* parse further down arrays */
-        if (type == json_type_array) {
-            json_parse_array(jvalue, NULL, conn);
-        }
-        else if (type != json_type_object) {
-            /* nothing to do it if is not an object */
-        } else {
-            jobj_parse(conn, jvalue);
-        }
-    }
-}
-
 static struct elastic_result *
 elastic_result_get(struct elastic_connection *conn, const char *box_id)
 {
@@ -241,39 +206,87 @@ elastic_result_get(struct elastic_connection *conn, const char *box_id)
 }
 
 void elastic_connection_last_uid_json(struct elastic_connection *conn,
-                                      char *key, struct json_object *val)
+                                      struct json_object *hits)
 {
-    if (conn != NULL && key != NULL && val != NULL) {
-        /* only interested in the uid field */
+    int hits_count = 0;
+    struct json_object *hit = NULL;
+
+    if (conn == NULL || hits == NULL) {
+        i_error("fts_elastic: last_uid_json: critical error while getting last uid");
+        return;
+    }
+
+    if (json_object_get_type(hits) != json_type_array) {
+        i_error("fts_elastic: last_uid_json: hits are not an array");
+        return;
+    }
+
+    hits_count = json_object_array_length(hits);
+    if (hits_count <= 0) {
+        i_warning("fts_elastic: last_uid_json: hits are empty array");
+        return;
+    }
+
+    hit = json_object_array_get_idx(hits, 0);
+    /* only interested in the first uid field */
+    json_object_object_foreach(hit, key, val) {
         if (strcmp(key, "_id") == 0) {
             conn->ctx->uid = json_object_get_int(val);
+            return;
         }
-    } else {
-        i_error("fts_elastic: last_uid_json: critical error while getting last uid");
     }
 }
 
 void elastic_connection_select_json(struct elastic_connection *conn,
-                                    char *key, struct json_object *val)
+                                    struct json_object *hits)
 {
     struct elastic_result *result = NULL;
     struct fts_score_map *tmp_score = NULL;
-    const char *box_guid;
+    struct json_object *hit;
+    int hits_count = 0;
+    int i = 0;
+    const char *_id;
+    const char *const *tmp;
 
-    if (conn != NULL) {
-        /* ensure a key and val exist before trying to process them */
-        if (key != NULL && val != NULL) {
+    if (conn == NULL || hits == NULL) {
+        i_error("fts_elastic: select_json: critical error while processing result JSON");
+        return;
+    }
+
+    if (json_object_get_type(hits) != json_type_array) {
+        i_error("fts_elastic: select_json: response hits are not array");
+        return;
+    }
+
+    hits_count = json_object_array_length(hits);
+    for (i = 0; i < hits_count; i++) {
+        hit = json_object_array_get_idx(hits, i);
+        json_object_object_foreach(hit, key, val) {
             if (strcmp(key, "_id") == 0) {
-                conn->ctx->uid = json_object_get_int(val);
-            }
-            if (strcmp(key, "_score") == 0) {
-                conn->ctx->score = json_object_get_double(val);  
-            }
-            if (strcmp(key, "_index") == 0) {
-                box_guid = json_object_get_string(val);
-                if (strncmp(box_guid, ES_INDEX_PREFIX, 4) == 0) {
-                    conn->ctx->box_guid = box_guid + 4;
+                // conn->ctx->uid = json_object_get_int(val);
+                _id = json_object_get_string(val);
+                tmp = t_strsplit_spaces(_id, "/");
+                if (str_to_int(*tmp, &conn->ctx->uid) < 0 || conn->ctx->uid == 0) {
+                    i_warning("fts_elastic: uid <= 0 in _id:\"%s\"", _id);
+                    continue;
                 }
+                tmp++;
+                if (*tmp == NULL) {
+                    i_warning("fts_elastic: mbox_guid not found in _id:\"%s\"", _id);
+                    continue;
+                }
+                conn->ctx->box_guid = p_strdup(conn->ctx->result_pool, *tmp);
+                /* parse user from _id
+                tmp++;
+                if (*tmp == NULL) {
+                    i_warning("fts_elastic: user not found in _id:\"%s\"", _id);
+                    continue;
+                }
+                user = p_strdup(conn->ctx->result_pool, *tmp);
+                */
+            }
+            else if (strcmp(key, "_score") == 0) {
+                conn->ctx->score = json_object_get_double(val);  
             }
         }
 
@@ -292,62 +305,44 @@ void elastic_connection_select_json(struct elastic_connection *conn,
             conn->ctx->box_guid = NULL;
             conn->ctx->results_found = TRUE;
         }
-    } else { /* conn != NULL && key != NULL && val != NULL */
-        i_error("fts_elastic: select_json: critical error while processing result JSON");
     }
 }
 
 void jobj_parse(struct elastic_connection *conn, json_object *jobj)
 {
-    enum json_type type;
-    json_object *temp = NULL;
+    struct json_object *jvalue = NULL;
 
     i_assert(jobj != NULL);
 
-    json_object_object_foreach(jobj, key, val)
-    {
-        /* reinitialise to temp each iteration */
-        temp = NULL;
+    /* Check errors */
+    if (json_object_object_get_ex(jobj, "errors", &jvalue)) {
+        i_warning("fts_elastic: errors in response: %s",
+                    json_object_to_json_string(jvalue));
+    }
 
-        type = json_object_get_type(val);
-
-        /* the output of the json_parse varies per post type */
-        switch (conn->post_type) {
-        case ELASTIC_POST_TYPE_LAST_UID:
-            /* we only care about the uid field */
-            if (strcmp(key, "_id") == 0) {
-                elastic_connection_last_uid_json(conn, key, val);
-            }
-
-            break;
-        case ELASTIC_POST_TYPE_SELECT:
-            elastic_connection_select_json(conn, key, val);
-            break;
-        case ELASTIC_POST_TYPE_UPDATE:
-            /* not implemented */
-            break;
-        case ELASTIC_POST_TYPE_REFRESH:
-            /* not implemented */
+    switch (conn->post_type) {
+    case ELASTIC_POST_TYPE_LAST_UID:
+    case ELASTIC_POST_TYPE_SELECT:
+        if (!json_object_object_get_ex(jobj, "hits", &jvalue)) {
+            i_warning("fts_elastic: no .hits in search response");
             break;
         }
-
-        /* recursively process the json */
-        switch (type) {
-        case json_type_boolean: /* fall through */
-        case json_type_double:  /* fall through */
-        case json_type_int:     /* fall through */
-        case json_type_string:  /* fall through */
-            break; 
-        case json_type_object:
-            temp = json_object_object_get(jobj, key);       
-            jobj_parse(conn, temp);
-            break;
-        case json_type_array:
-            json_parse_array(jobj, key, conn);
-            break;
-        case json_type_null:
+        if (!json_object_object_get_ex(jvalue, "hits", &jvalue)) {
+            i_warning("fts_elastic: no .hits.hits in search response");
             break;
         }
+        if (conn->post_type == ELASTIC_POST_TYPE_LAST_UID) {
+            elastic_connection_last_uid_json(conn, jvalue);
+        } else {
+            elastic_connection_select_json(conn, jvalue);
+        }
+        break;
+    case ELASTIC_POST_TYPE_UPDATE:
+        /* not implemented */
+        break;
+    case ELASTIC_POST_TYPE_REFRESH:
+        /* not implemented */
+        break;
     }
 }
 
@@ -409,7 +404,7 @@ int32_t elastic_connection_last_uid(struct elastic_connection *conn,
     conn->post_type = ELASTIC_POST_TYPE_LAST_UID;
 
     /* build the url */
-    url = t_strconcat(conn->http_base_url, ES_INDEX_PREFIX, box_guid, "/_search", NULL);
+    url = t_strconcat(conn->http_base_url, "_search", NULL);
 
     /* perform the actual POST */
     elastic_connection_post(conn, url, query);
@@ -491,7 +486,7 @@ elastic_connection_http_request(struct elastic_connection *conn,
     return http_req;
 }
 
-int32_t elastic_connection_refresh(struct elastic_connection *conn)
+int elastic_connection_refresh(struct elastic_connection *conn)
 {
     const char *url = NULL;
     string_t *data = t_str_new_const("", 0);
@@ -508,7 +503,7 @@ int32_t elastic_connection_refresh(struct elastic_connection *conn)
     /* build the url; we don't have any choice but to refresh the entire 
      * ES server here because Dovecot's refresh API doesn't give us the
      * mailbox that is being refreshed. */
-    url = t_strconcat(conn->http_base_url, "/_refresh", NULL);
+    url = t_strconcat(conn->http_base_url, "_refresh", NULL);
 
     /* perform the actual POST */
     elastic_connection_post(conn, url, data);
@@ -520,16 +515,15 @@ int32_t elastic_connection_refresh(struct elastic_connection *conn)
     return 0;
 }
 
-int32_t elastic_connection_select(struct elastic_connection *conn,
-                                  pool_t pool, string_t *query,
-                                  const char *box_guid,
-                                  struct elastic_result ***box_results_r)
+int elastic_connection_select(struct elastic_connection *conn,
+                              pool_t pool, string_t *query,
+                              struct elastic_result ***box_results_r)
 {
     struct elastic_lookup_context lookup_context;
     const char *url = NULL;
 
     /* validate our input */
-    if (conn == NULL || query == NULL || box_guid == NULL || box_results_r == NULL) {
+    if (conn == NULL || query == NULL || box_results_r == NULL) {
         i_error("fts_elastic: select: critical error during select");
         return -1;
     }
@@ -551,7 +545,7 @@ int32_t elastic_connection_select(struct elastic_connection *conn,
     json_tokener_reset(conn->tok);
 
     /* build the url */
-    url = t_strconcat(conn->http_base_url, ES_INDEX_PREFIX, box_guid, "/_search", NULL);
+    url = t_strconcat(conn->http_base_url, "_search", NULL);
 
     /* perform the actual POST */
     elastic_connection_post(conn, url, query);

@@ -32,59 +32,78 @@ In dovecot/conf.d/90-plugins.conf:
 
 	plugin {
 	  fts = elastic
-	  fts_elastic = debug url=http://localhost:9200/
+	  fts_elastic = debug url=http://localhost:9200/m/ bulk_size=5000000 refresh=fts rawlog_dir=/var/log/fts-elastic/
 	  fts_autoindex = yes
 	}
 
 There are only two supported configuration parameters at the moment:
-* url=\<elasticsearch url\> Required base URL
+* url=\<elasticsearch url\> Required elastic URL with index name, must end with slash /
+* bulk_size=\<positive integer\> How large bulk requests we want to send to elastic in bytes (default=5000000)
+* refresh={fts,index,never} When to refresh elastic index,
+  * fts: when parent dovecot fts plugin calls it (typically before search)
+  * index: after each bulk update using ?refrest=true query param (create not effective indexes when combined with fts_autoindex=yes)
+  * never: leave it to elastic, indexed emails may not be searchable immediately
 * debug Enables HTTP debugging
+* rawlog_dir is directory where HTTP communication with elasticsearch server is written (useful for debugging plugin or elastic schema)
 
 ## ElasticSearch Indicies
-fts-elastic creates an index per mail box. It creates one field for each field in the e-mail header and for the body.
+fts-elastic index all message in on index. It creates one field for each field in the e-mail header and for the body.
+_id is in the form "_id":"uid/mbox-guid/user@domain", example: "_id":"3/f40efa2f8f44ad54424000006e8130ae/filip.hanes@example.com"
+Fields box and user needs to be keyword fields.
 
 You can setup index template on Elasticsearch with command
 
-	curl -X PUT "http://elasticIP:9200/_template/box?pretty" -H 'Content-Type: application/json' -d "@index-template-schema.json"
+	curl -X PUT "http://elasticIP:9200/_template/mail?pretty" -H 'Content-Type: application/json' -d "@elastic-schema.json"
 
-An example of pushed data for a basic e-mail with no attachments:
+
+An example of pushed data:
 
 	{
-		"uid": 3,
+		"user": "filip.hanes@example.com",
 		"box": "f40efa2f8f44ad54424000006e8130ae",
-		"Date": "Thu, 08 Jan 2015 00:20:05 +1100",
-		"To": "josh@localhost.localdomain",
-		"Subject": "Test #3",
-		"Message-Id": "<20150107132005.07DA3140314@localhost.localdomain>",
-		"From": "josh <josh@localhost.localdomain>",
+		"uid": 3,
+		"date": "Thu, 08 Jan 2015 00:20:05 +0000",
+		"from": "josh <josh@localhost.localdomain>",
+		"sender": "Filip Hanes",
+		"to": "<filip.hanes@example.com>",
+		"cc": "User <user@example.com>",
+		"bcc": "\"Test User\" <test@example.com>",
+		"subject": "Test #3",
+		"message-id": "<20150107132005.07DA3140314@example.com>",
 		"body": "This is the body of test #3.\n"
 	}
 
 An example search:
 
-	{
-	  "query": {
-	    "query_string": {
-	      "query": "*Dovecot*",
-	      "fields": [
-	        "subject"
-	      ]
-	    }
-	  },
-	  "fields": [
-	    "uid",
-	    "box"
-	  ]
-	}
+```bash
+curl -X POST "http://elasticIP:9200/m/_search?pretty" -H 'Content-Type: application/json' -d '
+{
+  "query": {
+    "bool": {
+      "must": [
+        {"term": {"user": "user@example"}},
+        {"term": {"box": "f40efa2f8f44ad54424000006e8130ae"}},
+        {
+          "multi_match": {
+            "query": "test",
+            "operator": "and",
+            "fields": ["from","to","cc","bcc","sender","subject","body"]
+          }
+        }
+      ]
+    }
+  },
+  "size": 100
+}
+'
+```
 
 ## TODO
-There are a number of things left to be implemented:
+* user/mbox_gui parametrized url i.e.: url=http://127.0.0.1/m-%u/ would use index http://127.0.0.1/m-filip.hanes@example.com/
+* routing key with user for better search performance
 * Rescan
 * Optimisation (if any)
 * Multiple mailbox lookup (for clients that call lookup_multi; need to find one)
-
-## Background
-Dovecot currently supports two primary full text search indexing plugins `fts-solr` and `fts-squat`. I wanted to use an FTS service that I already had set-up and that wasn't quite as heavy as Solr, primarily to consolidate infrastructure and to focus resources on optimising our ES instances.
 
 ## Thanks
 This plugin borrows heavily from dovecot itself particularly for the automatic detection of dovecont-config (see m4/dovecot.m4). The fts-solr and fts-squat plugins were also used as reference material for understanding the Dovecot FTS API.
