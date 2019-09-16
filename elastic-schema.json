@@ -1,12 +1,11 @@
 {
-    "index_patterns": ["m*"],
     "settings": {
-      "number_of_shards": 1,
+      "number_of_shards": 10,
       "number_of_replicas": 0
     },
     "mappings": {
-      "_source": {
-        "enabled": true
+      "_source":  {
+        "enabled": false
       },
       "properties": {
         "user":   {"type": "keyword"},

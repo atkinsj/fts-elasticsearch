@@ -16,6 +16,7 @@
 #include <json-c/json.h>
 #include <stdio.h>
 
+
 struct elastic_lookup_context {
     pool_t result_pool;
 
@@ -35,13 +36,15 @@ struct elastic_lookup_context {
     bool results_found;
 };
 
+
 struct elastic_connection {
     /* ElasticSearch HTTP API information */
     char *http_host;
     in_port_t http_port;
     char *http_base_url;
+    char *url_params; /* contains elastic routing key appended to urls */
     char *http_failure;
-    int32_t request_status;
+    int request_status;
 
     /* for streaming processing of results */
     struct istream *payload;
@@ -53,13 +56,15 @@ struct elastic_connection {
     /* context for the current lookup */
     struct elastic_lookup_context *ctx;
 
-    /* if we should send ?refresh=true to elastic */
-    bool refresh_on_update;
+    /* if we should send ?refresh=true on update _bulk requests */
+    unsigned int refresh_on_update:1;
     unsigned int debug:1;
     unsigned int http_ssl:1;
 };
 
+
 int elastic_connection_init(const struct fts_elastic_settings *set,
+                            const char * routing_key,
                             struct elastic_connection **conn_r,
                             const char **error_r)
 {
@@ -78,7 +83,6 @@ int elastic_connection_init(const struct fts_elastic_settings *set,
                &http_url, &error) < 0) {
         *error_r = t_strdup_printf(
             "fts_elastic: Failed to parse HTTP url: %s", error);
-
         return -1;
     }
 
@@ -91,6 +95,7 @@ int elastic_connection_init(const struct fts_elastic_settings *set,
     conn->http_port = http_url->port;
     conn->http_base_url = i_strconcat(http_url->path, http_url->enc_query, NULL);
     conn->http_ssl = http_url->have_ssl;
+    conn->url_params = i_strconcat("?routing=", routing_key, NULL);
     conn->debug = set->debug;
     conn->refresh_on_update = set->refresh_on_update;
     conn->tok = json_tokener_new();
@@ -113,15 +118,18 @@ int elastic_connection_init(const struct fts_elastic_settings *set,
     return 0;
 }
 
+
 void elastic_connection_deinit(struct elastic_connection *conn)
 {
     if (conn != NULL) {
         i_free(conn->http_host);
         i_free(conn->http_base_url);
+        i_free(conn->url_params);
         json_tokener_free(conn->tok);
         i_free(conn);
     }
 }
+
 
 static void
 elastic_connection_update_response(const struct http_response *response,
@@ -136,22 +144,102 @@ elastic_connection_update_response(const struct http_response *response,
     }
 }
 
-int elastic_connection_update(struct elastic_connection *conn,
-                              string_t *cmd)
-{
-    const char *url = NULL;
 
-    if (conn != NULL && cmd != NULL) {
-        /* set-up the connection */
-        conn->post_type = ELASTIC_POST_TYPE_UPDATE;
-        url = t_strconcat(conn->http_base_url, "_bulk", NULL);
-        elastic_connection_post(conn, url, cmd);
-        return conn->request_status;
+static void elastic_connection_payload_input(struct elastic_connection *conn)
+{
+    const unsigned char *data = NULL;
+    json_object *jobj = NULL;
+    enum json_tokener_error jerr;
+    size_t size;
+    int ret = -1;
+
+    /* continue appending data so long as it is available */
+    while ((ret = i_stream_read_more(conn->payload, &data, &size)) > 0) {
+        jobj = json_tokener_parse_ex(conn->tok, (const char *)data, size);
+        i_stream_skip(conn->payload, size);
+
+        jerr = json_tokener_get_error(conn->tok);
+        if (jerr == json_tokener_continue) {
+            if (ret < 0)
+                i_error("fts_elastic: json response not finished");
+        } else if (jerr == json_tokener_success) {
+            /* extract values from resulting json object */
+            jobj_parse(conn, jobj);
+        } else {
+            i_error("fts_elastic: json tokener error: %s", json_tokener_error_desc(jerr));
+            break;
+        }
+    }
+
+    if (ret == 0) {
+        /* we will be called again for more data */
     } else {
-        i_debug("fts_elastic: connection_update: conn is NULL");
-        return -1;
+        if (conn->payload->stream_errno != 0) {
+            i_error("fts_elastic: failed to read payload from HTTP server: %m");
+            conn->request_status = -1;
+        }
+
+        /* clean-up */
+        io_remove(&conn->io);
+        i_stream_unref(&conn->payload);
     }
 }
+
+
+static void
+elastic_connection_select_response(const struct http_response *response,
+                                   struct elastic_connection *conn)
+{
+    /* 404's on non-updates mean the index doesn't exist and should be indexed. 
+     * we don't want to flood the error log with useless messages since dovecot
+     * will redo the query automatically after indexing it. */
+    if (conn->post_type != ELASTIC_POST_TYPE_UPDATE && response->status == 404) {
+        conn->request_status = -1;
+        return;
+    }
+
+    /* 404's usually mean the index is missing. it could mean you also hit a
+     * non-ES service but this seems better than a second indices exists lookup */
+    if (response->status / 100 != 2) {
+        i_error("fts_elastic: lookup failed: %s", response->reason);
+        conn->request_status = -1;
+        return;
+    }
+
+    if (response->payload == NULL) {
+        i_error("fts_elastic: lookup failed: empty response payload");
+        conn->request_status = -1;
+        return;
+    }
+
+    i_stream_ref(response->payload);
+    conn->payload = response->payload;
+    conn->io = io_add_istream(response->payload,
+                    elastic_connection_payload_input, conn);
+    elastic_connection_payload_input(conn);
+}
+
+
+static void
+elastic_connection_http_response(const struct http_response *response,
+                                 struct elastic_connection *conn)
+{
+    if (response != NULL && conn != NULL) {
+        switch (conn->post_type) {
+        case ELASTIC_POST_TYPE_LAST_UID: /* fall through */
+        case ELASTIC_POST_TYPE_SELECT:
+            elastic_connection_select_response(response, conn);
+            break;
+        case ELASTIC_POST_TYPE_UPDATE:
+            elastic_connection_update_response(response, conn);
+            break;
+        case ELASTIC_POST_TYPE_REFRESH:
+            /* not implemented */
+            break;
+        }
+    }
+}
+
 
 int elastic_connection_post(struct elastic_connection *conn,
                             const char *url, string_t *data)
@@ -164,8 +252,11 @@ int elastic_connection_post(struct elastic_connection *conn,
         return -1;
     }
 
-    /* binds a callback object to elastic_connection_http_response */
-    http_req = elastic_connection_http_request(conn, url);
+    http_req = http_client_request(elastic_http_client, "POST", conn->http_host,
+                                   url, elastic_connection_http_response, conn);
+    http_client_request_set_port(http_req, conn->http_port);
+    http_client_request_set_ssl(http_req, conn->http_ssl);
+    http_client_request_add_header(http_req, "Content-Type", "application/json");
 
     post_payload = i_stream_create_from_buffer(data);
     http_client_request_set_payload(http_req, post_payload, TRUE);
@@ -177,6 +268,7 @@ int elastic_connection_post(struct elastic_connection *conn,
 
     return conn->request_status;
 }
+
 
 static struct elastic_result *
 elastic_result_get(struct elastic_connection *conn, const char *box_id)
@@ -204,6 +296,7 @@ elastic_result_get(struct elastic_connection *conn, const char *box_id)
 
     return result;
 }
+
 
 void elastic_connection_last_uid_json(struct elastic_connection *conn,
                                       struct json_object *hits)
@@ -236,6 +329,7 @@ void elastic_connection_last_uid_json(struct elastic_connection *conn,
         }
     }
 }
+
 
 void elastic_connection_select_json(struct elastic_connection *conn,
                                     struct json_object *hits)
@@ -308,6 +402,7 @@ void elastic_connection_select_json(struct elastic_connection *conn,
     }
 }
 
+
 void jobj_parse(struct elastic_connection *conn, json_object *jobj)
 {
     struct json_object *jvalue = NULL;
@@ -346,53 +441,13 @@ void jobj_parse(struct elastic_connection *conn, json_object *jobj)
     }
 }
 
-static void elastic_connection_payload_input(struct elastic_connection *conn)
-{
-    const unsigned char *data = NULL;
-    json_object *jobj = NULL;
-    enum json_tokener_error jerr;
-    size_t size;
-    int ret = -1;
 
-    /* continue appending data so long as it is available */
-    while ((ret = i_stream_read_more(conn->payload, &data, &size)) > 0) {
-        jobj = json_tokener_parse_ex(conn->tok, (const char *)data, size);
-        i_stream_skip(conn->payload, size);
-
-        jerr = json_tokener_get_error(conn->tok);
-        if (jerr == json_tokener_continue) {
-            if (ret < 0)
-                i_error("fts_elastic: json response not finished");
-        } else if (jerr == json_tokener_success) {
-            /* extract values from resulting json object */
-            jobj_parse(conn, jobj);
-        } else {
-            i_error("fts_elastic: json tokener error: %s", json_tokener_error_desc(jerr));
-            break;
-        }
-    }
-
-    if (ret == 0) {
-        /* we will be called again for more data */
-    } else {
-        if (conn->payload->stream_errno != 0) {
-            i_error("fts_elastic: failed to read payload from HTTP server: %m");
-            conn->request_status = -1;
-        }
-
-        /* clean-up */
-        io_remove(&conn->io);
-        i_stream_unref(&conn->payload);
-    }
-}
-
-int32_t elastic_connection_last_uid(struct elastic_connection *conn,
-                                    string_t *query, const char *box_guid)
+int32_t elastic_connection_get_last_uid(struct elastic_connection *conn, string_t *query)
 {
     struct elastic_lookup_context lookup_context;
     const char *url = NULL;
 
-    if (conn == NULL || query == NULL || box_guid == NULL) {
+    if (conn == NULL || query == NULL) {
         i_error("fts_elastic: last_uid: critical error while fetching last UID");
         return -1;
     }
@@ -404,7 +459,7 @@ int32_t elastic_connection_last_uid(struct elastic_connection *conn,
     conn->post_type = ELASTIC_POST_TYPE_LAST_UID;
 
     /* build the url */
-    url = t_strconcat(conn->http_base_url, "_search", NULL);
+    url = t_strconcat(conn->http_base_url, "_search", conn->url_params, NULL);
 
     /* perform the actual POST */
     elastic_connection_post(conn, url, query);
@@ -413,83 +468,31 @@ int32_t elastic_connection_last_uid(struct elastic_connection *conn,
     return conn->ctx->uid;
 }
 
-static void
-elastic_connection_select_response(const struct http_response *response,
-                                   struct elastic_connection *conn)
+
+int elastic_connection_update(struct elastic_connection *conn, string_t *cmd)
 {
-    /* 404's on non-updates mean the index doesn't exist and should be indexed. 
-     * we don't want to flood the error log with useless messages since dovecot
-     * will redo the query automatically after indexing it. */
-    if (conn->post_type != ELASTIC_POST_TYPE_UPDATE && response->status == 404) {
-        conn->request_status = -1;
+    const char *url = NULL;
 
-        return;
-    }
-
-    /* 404's usually mean the index is missing. it could mean you also hit a
-     * non-ES service but this seems better than a second indices exists lookup */
-    if (response->status / 100 != 2) {
-        i_error("fts_elastic: lookup failed: %s", response->reason);
-        conn->request_status = -1;
-        return;
-    }
-
-    if (response->payload == NULL) {
-        i_error("fts_elastic: lookup failed: empty response payload");
-        conn->request_status = -1;
-        return;
-    }
-
-    i_stream_ref(response->payload);
-    conn->payload = response->payload;
-    conn->io = io_add_istream(response->payload,
-                    elastic_connection_payload_input, conn);
-    elastic_connection_payload_input(conn);
-}
-
-static void
-elastic_connection_http_response(const struct http_response *response,
-                                 struct elastic_connection *conn)
-{
-    if (response != NULL && conn != NULL) {
-        switch (conn->post_type) {
-        case ELASTIC_POST_TYPE_LAST_UID: /* fall through */
-        case ELASTIC_POST_TYPE_SELECT:
-            elastic_connection_select_response(response, conn);
-            break;
-        case ELASTIC_POST_TYPE_UPDATE:
-            elastic_connection_update_response(response, conn);
-            break;
-        case ELASTIC_POST_TYPE_REFRESH:
-            /* not implemented */
-            break;
+    if (conn != NULL && cmd != NULL) {
+        /* set-up the connection */
+        conn->post_type = ELASTIC_POST_TYPE_UPDATE;
+        url = t_strconcat(conn->http_base_url, "_bulk", conn->url_params, NULL);
+        if (conn->refresh_on_update) {
+            url = t_strconcat(url, "&refresh=true", NULL);
         }
+        elastic_connection_post(conn, url, cmd);
+        return conn->request_status;
+    } else {
+        i_debug("fts_elastic: connection_update: conn is NULL");
+        return -1;
     }
 }
 
-struct http_client_request*
-elastic_connection_http_request(struct elastic_connection *conn,
-                                const char *url)
-{
-    struct http_client_request *http_req = NULL;
-
-    if (conn != NULL && url != NULL) {
-        http_req = http_client_request(elastic_http_client, "POST",
-                                       conn->http_host, url,
-                                       elastic_connection_http_response,
-                                       conn);
-        http_client_request_set_port(http_req, conn->http_port);
-        http_client_request_set_ssl(http_req, conn->http_ssl);
-        http_client_request_add_header(http_req, "Content-Type", "application/json");
-    }
-
-    return http_req;
-}
 
 int elastic_connection_refresh(struct elastic_connection *conn)
 {
     const char *url = NULL;
-    string_t *data = t_str_new_const("", 0);
+    string_t *query = t_str_new_const("", 0);
 
     /* validate input */
     if (conn == NULL) {
@@ -503,10 +506,10 @@ int elastic_connection_refresh(struct elastic_connection *conn)
     /* build the url; we don't have any choice but to refresh the entire 
      * ES server here because Dovecot's refresh API doesn't give us the
      * mailbox that is being refreshed. */
-    url = t_strconcat(conn->http_base_url, "_refresh", NULL);
+    url = t_strconcat(conn->http_base_url, "_refresh", conn->url_params, NULL);
 
     /* perform the actual POST */
-    elastic_connection_post(conn, url, data);
+    elastic_connection_post(conn, url, query);
 
     if (conn->request_status < 0) {
         return -1;
@@ -514,6 +517,7 @@ int elastic_connection_refresh(struct elastic_connection *conn)
 
     return 0;
 }
+
 
 int elastic_connection_select(struct elastic_connection *conn,
                               pool_t pool, string_t *query,
@@ -545,7 +549,7 @@ int elastic_connection_select(struct elastic_connection *conn,
     json_tokener_reset(conn->tok);
 
     /* build the url */
-    url = t_strconcat(conn->http_base_url, "_search", NULL);
+    url = t_strconcat(conn->http_base_url, "_search", conn->url_params, NULL);
 
     /* perform the actual POST */
     elastic_connection_post(conn, url, query);

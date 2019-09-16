@@ -39,7 +39,7 @@ In dovecot/conf.d/90-plugins.conf:
 There are only two supported configuration parameters at the moment:
 * url=\<elasticsearch url\> Required elastic URL with index name, must end with slash /
 * bulk_size=\<positive integer\> How large bulk requests we want to send to elastic in bytes (default=5000000)
-* refresh={fts,index,never} When to refresh elastic index,
+* refresh={fts,index,never} When to refresh elastic index
   * fts: when parent dovecot fts plugin calls it (typically before search)
   * index: after each bulk update using ?refrest=true query param (create not effective indexes when combined with fts_autoindex=yes)
   * never: leave it to elastic, indexed emails may not be searchable immediately
@@ -51,9 +51,9 @@ fts-elastic index all message in on index. It creates one field for each field i
 _id is in the form "_id":"uid/mbox-guid/user@domain", example: "_id":"3/f40efa2f8f44ad54424000006e8130ae/filip.hanes@example.com"
 Fields box and user needs to be keyword fields.
 
-You can setup index template on Elasticsearch with command
+You can setup index on Elasticsearch with command
 
-	curl -X PUT "http://elasticIP:9200/_template/mail?pretty" -H 'Content-Type: application/json' -d "@elastic-schema.json"
+	curl -X PUT "http://elasticIP:9200/m?pretty" -H 'Content-Type: application/json' -d "@elastic-schema.json"
 
 
 An example of pushed data:
@@ -100,7 +100,6 @@ curl -X POST "http://elasticIP:9200/m/_search?pretty" -H 'Content-Type: applicat
 
 ## TODO
 * user/mbox_gui parametrized url i.e.: url=http://127.0.0.1/m-%u/ would use index http://127.0.0.1/m-filip.hanes@example.com/
-* routing key with user for better search performance
 * Rescan
 * Optimisation (if any)
 * Multiple mailbox lookup (for clients that call lookup_multi; need to find one)

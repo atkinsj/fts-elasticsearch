@@ -33,7 +33,7 @@ fts_elastic_plugin_init_settings(struct mail_user *user,
         str = "";
     }
 
-    set->bulk_size = 5000000;
+    set->bulk_size = 5*1024*1024; /* 5 MB */
     set->refresh_by_fts = TRUE;
     set->refresh_on_update = FALSE;
 
@@ -45,7 +45,7 @@ fts_elastic_plugin_init_settings(struct mail_user *user,
 		} else if (str_begins(*tmp, "rawlog_dir=")) {
 			set->rawlog_dir = p_strdup(user->pool, *tmp + 11);
 		} else if (str_begins(*tmp, "bulk_size=")) {
-			if (str_to_uint(*tmp+11, &set->bulk_size) < 0 || set->bulk_size == 0) {
+			if (str_to_uint(*tmp+10, &set->bulk_size) < 0 || set->bulk_size == 0) {
 				i_error("fts_elastic: bulk_size must be a positive integer");
                 return -1;
 			}

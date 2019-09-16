@@ -24,19 +24,25 @@ struct elastic_result {
 };
 
 int elastic_connection_init(const struct fts_elastic_settings *set,
+                            const char * routing_key,
                             struct elastic_connection **conn_r,
                             const char **error_r);
 
 void elastic_connection_deinit(struct elastic_connection *conn);
 
-
 int elastic_connection_update(struct elastic_connection *conn, string_t *cmd);
+
+int elastic_connection_select(struct elastic_connection *conn,
+                              pool_t pool, string_t *query,
+                              struct elastic_result ***box_results_r);
+
+int32_t elastic_connection_get_last_uid(struct elastic_connection *conn,
+                                        string_t *query);
+
+int elastic_connection_refresh(struct elastic_connection *conn);
 
 int elastic_connection_post(struct elastic_connection *conn,
                             const char *url, string_t *cmd);
-
-void json_parse_array(json_object *jobj, char *key,
-                      struct elastic_connection *conn);
 
 void elastic_connection_last_uid_json(struct elastic_connection *conn,
                                       struct json_object *hits);
@@ -44,20 +50,6 @@ void elastic_connection_last_uid_json(struct elastic_connection *conn,
 void elastic_connection_select_json(struct elastic_connection *conn,
                                     struct json_object *hits);
 
-
 void jobj_parse(struct elastic_connection *conn, json_object *jobj);
-
-
-int32_t elastic_connection_last_uid(struct elastic_connection *conn,
-                                    string_t *query, const char *box_guid);
-
-struct http_client_request*
-elastic_connection_http_request(struct elastic_connection *conn, const char *url);
-
-int elastic_connection_refresh(struct elastic_connection *conn);
-
-int elastic_connection_select(struct elastic_connection *conn,
-                              pool_t pool, string_t *query,
-                              struct elastic_result ***box_results_r);
 
 #endif
