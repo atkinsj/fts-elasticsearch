@@ -506,7 +506,7 @@ int elastic_connection_refresh(struct elastic_connection *conn)
     /* build the url; we don't have any choice but to refresh the entire 
      * ES server here because Dovecot's refresh API doesn't give us the
      * mailbox that is being refreshed. */
-    url = t_strconcat(conn->http_base_url, "_refresh", conn->url_params, NULL);
+    url = t_strconcat(conn->http_base_url, "_refresh", NULL);
 
     /* perform the actual POST */
     elastic_connection_post(conn, url, query);
