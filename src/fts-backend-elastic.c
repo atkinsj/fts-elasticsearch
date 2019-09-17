@@ -192,10 +192,10 @@ fts_backend_elastic_get_last_uid(struct fts_backend *_backend,
             "\"sort\":{"
                 "\"uid\":\"desc\""
             "},"
-            "\"query\":{"
+            "\"query\":["
                 "\"term\":{\"user\":\"%s\"},"
                 "\"term\":{\"box\":\"%s\"}"
-            "},"
+            "],"
             "\"_source\":false,"
             "\"size\":1"
         "}";

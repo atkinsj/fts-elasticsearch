@@ -5,7 +5,7 @@
     },
     "mappings": {
       "_source":  {
-        "enabled": false
+        "enabled": true
       },
       "properties": {
         "user":   {"type": "keyword"},
