@@ -18,6 +18,7 @@
         "bcc":    {"type": "text"},
         "subject":{"type": "text"},
         "body":   {"type": "text"},
+        "message-id":{"type": "keyword"},
         "date":   {
           "type": "date",
           "format": "EEE, d LLL yyyy HH:mm:ss Z||yyyy-MM-dd HH:mm:ss||yyyy-MM-dd"

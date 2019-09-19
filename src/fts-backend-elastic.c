@@ -68,7 +68,7 @@ static const char *elastic_field_prepare(const char *field)
 static const char elastic_escape_chars[]
     = {'"',   '\\',  '\t', '\b', '\n', '\r', '\f',  0x1C,  0x1D,  0x1E,  0x1F, '\0'};
 static const char *elastic_escape_replaces[]
-    = {"\\\"","\\\\","\\t","\\b","\\n","\\r","\\f","0x1C","0x1D","0x1E","0x1F"};
+    = {"\\\"","\\\\","\\t","\\b","\\n","\\r","\\f","0x1C","0x1D","0x1E","0x1F", NULL};
 
 /* escape control characters that JSON isn't a fan of */
 static const char *elastic_escape(const char *str)
@@ -116,12 +116,10 @@ static struct fts_backend *fts_backend_elastic_alloc(void)
 }
 
 static int
-fts_backend_elastic_init(struct fts_backend *_backend,
-                         const char **error_r ATTR_UNUSED)
+fts_backend_elastic_init(struct fts_backend *_backend, const char **error_r)
 {
     struct elastic_fts_backend *backend = NULL;
     struct fts_elastic_user *fuser = NULL;
-    const char *routing_key = "-";
 
     /* ensure our backend is provided */
     if (_backend != NULL) {
@@ -137,10 +135,7 @@ fts_backend_elastic_init(struct fts_backend *_backend,
         return -1;
     }
 
-    if (_backend->ns->owner != NULL)
-        routing_key = _backend->ns->owner->username;
-
-    return elastic_connection_init(&fuser->set, routing_key, &backend->elastic_conn, error_r);
+    return elastic_connection_init(&fuser->set, _backend->ns, &backend->elastic_conn, error_r);
 }
 
 static void
@@ -192,7 +187,7 @@ fts_backend_elastic_get_last_uid(struct fts_backend *_backend,
             "\"sort\":{"
                 "\"uid\":\"desc\""
             "},"
-            "\"query\":["
+            "\"filter\":["
                 "\"term\":{\"user\":\"%s\"},"
                 "\"term\":{\"box\":\"%s\"}"
             "],"
@@ -237,6 +232,7 @@ fts_backend_elastic_get_last_uid(struct fts_backend *_backend,
         return -1;
     }
 
+    i_error("fts_elastic: get_last_uid: querying last uid from elastic");
     cmd = str_new(default_pool, 256);
     if (_backend->ns->owner != NULL) {
         str_printfa(cmd, JSON_LAST_UID, _backend->ns->owner->username, box_guid);
@@ -244,17 +240,12 @@ fts_backend_elastic_get_last_uid(struct fts_backend *_backend,
         str_printfa(cmd, JSON_LAST_UID, "-", box_guid);
     }
 
-    /* call ElasticSearch */
-    ret = elastic_connection_get_last_uid(backend->elastic_conn, cmd);
+    ret = elastic_connection_get_last_uid(backend->elastic_conn, cmd, last_uid_r);
     str_free(&cmd);
 
-    if (ret > 0) {
-        *last_uid_r = ret;
-        fts_index_set_last_uid(box, *last_uid_r);
-        return 0;
-    }
-    
-    *last_uid_r = 0;
+    if (ret < 0)
+        return -1;
+
     fts_index_set_last_uid(box, *last_uid_r);
     return 0;
 }
@@ -711,7 +702,6 @@ fts_backend_elastic_lookup(struct fts_backend *_backend, struct mailbox *box,
     /* validate our input */
     if (_backend == NULL || box == NULL || args == NULL || result == NULL) {
         i_error("fts_elastic: critical error during lookup");
-
         return -1;
     }
 
@@ -748,16 +738,17 @@ fts_backend_elastic_lookup(struct fts_backend *_backend, struct mailbox *box,
     }
 
     /* generate json search query */
-    str_append(str, "{\"query\":{\"bool\":{\"must\":[");
-    str_printfa(str, "{\"term\":{\"box\":\"%s\"}}", box_guid);
-    str_printfa(str, ",{\"term\":{\"user\":\"%s\"}}",
-                        _backend->ns->owner != NULL ? _backend->ns->owner->username : "");
+    str_append(str, "{\"query\":{\"bool\":{\"filter\":[");
+    str_printfa(str, "{\"term\":{\"user\":\"%s\"}},"
+                     "{\"term\":{\"box\": \"%s\"}}]",
+                        _backend->ns->owner != NULL ? _backend->ns->owner->username : "",
+                        box_guid);
 
     if (str_len(fields) > 0) {
-        str_append(str, ",");
+        str_append(str, ",\"must\":[");
         str_printfa(str, JSON_MULTI_MATCH, str_c(query), operator_arg, str_c(fields));
+        str_append(str, "]");
     }
-    str_append(str, "]");
 
     if (str_len(fields_not) > 0) {
         str_append(str, ",\"must_not\":[");
@@ -813,6 +804,7 @@ struct fts_backend fts_backend_elastic = {
         fts_backend_elastic_optimize,
         fts_backend_default_can_lookup,
         fts_backend_elastic_lookup,
+        /* TODO: fts_backend_elastic_multi_lookup, */
         NULL
     }
 };

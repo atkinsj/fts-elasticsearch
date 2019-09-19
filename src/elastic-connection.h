@@ -24,7 +24,7 @@ struct elastic_result {
 };
 
 int elastic_connection_init(const struct fts_elastic_settings *set,
-                            const char * routing_key,
+                            struct mail_namespace *ns,
                             struct elastic_connection **conn_r,
                             const char **error_r);
 
@@ -36,8 +36,9 @@ int elastic_connection_select(struct elastic_connection *conn,
                               pool_t pool, string_t *query,
                               struct elastic_result ***box_results_r);
 
-int32_t elastic_connection_get_last_uid(struct elastic_connection *conn,
-                                        string_t *query);
+int elastic_connection_get_last_uid(struct elastic_connection *conn,
+                                    string_t *query,
+                                    uint32_t *last_uid_r);
 
 int elastic_connection_refresh(struct elastic_connection *conn);
 

@@ -8,6 +8,7 @@
 #include "strescape.h"
 #include "ioloop.h"
 #include "istream.h"
+#include "mail-namespace.h"
 #include "http-url.h"
 #include "http-client.h"
 #include "fts-elastic-plugin.h"
@@ -38,6 +39,8 @@ struct elastic_lookup_context {
 
 
 struct elastic_connection {
+    struct mail_namespace *ns;
+
     /* ElasticSearch HTTP API information */
     char *http_host;
     in_port_t http_port;
@@ -64,7 +67,7 @@ struct elastic_connection {
 
 
 int elastic_connection_init(const struct fts_elastic_settings *set,
-                            const char * routing_key,
+                            struct mail_namespace *ns,
                             struct elastic_connection **conn_r,
                             const char **error_r)
 {
@@ -87,6 +90,7 @@ int elastic_connection_init(const struct fts_elastic_settings *set,
     }
 
     conn = i_new(struct elastic_connection, 1);
+    conn->ns = ns;
 #if defined(DOVECOT_PREREQ) && DOVECOT_PREREQ(2,3)
     conn->http_host = i_strdup(http_url->host.name);
 #else
@@ -95,7 +99,8 @@ int elastic_connection_init(const struct fts_elastic_settings *set,
     conn->http_port = http_url->port;
     conn->http_base_url = i_strconcat(http_url->path, http_url->enc_query, NULL);
     conn->http_ssl = http_url->have_ssl;
-    conn->url_params = i_strconcat("?routing=", routing_key, NULL);
+    conn->url_params = i_strconcat("?routing=",
+                            ns->owner != NULL ? ns->owner->username : "-", NULL);
     conn->debug = set->debug;
     conn->refresh_on_update = set->refresh_on_update;
     conn->tok = json_tokener_new();
@@ -442,7 +447,9 @@ void jobj_parse(struct elastic_connection *conn, json_object *jobj)
 }
 
 
-int32_t elastic_connection_get_last_uid(struct elastic_connection *conn, string_t *query)
+int elastic_connection_get_last_uid(struct elastic_connection *conn,
+                                    string_t *query,
+                                    uint32_t *last_uid_r)
 {
     struct elastic_lookup_context lookup_context;
     const char *url = NULL;
@@ -462,10 +469,12 @@ int32_t elastic_connection_get_last_uid(struct elastic_connection *conn, string_
     url = t_strconcat(conn->http_base_url, "_search", conn->url_params, NULL);
 
     /* perform the actual POST */
-    elastic_connection_post(conn, url, query);
+    if (elastic_connection_post(conn, url, query) < 0)
+        return -1;
 
-    /* set during the json parsing; will be the intiailised -1 or a valid uid */
-    return conn->ctx->uid;
+    /* set during the json parsing; will be the initialised 0 or a valid uid */
+    *last_uid_r = conn->ctx->uid;
+    return 0;
 }
 
 
@@ -504,7 +513,7 @@ int elastic_connection_refresh(struct elastic_connection *conn)
     conn->post_type = ELASTIC_POST_TYPE_REFRESH;
 
     /* build the url; we don't have any choice but to refresh the entire 
-     * ES server here because Dovecot's refresh API doesn't give us the
+     * ES index here because Dovecot's refresh API doesn't give us the
      * mailbox that is being refreshed. */
     url = t_strconcat(conn->http_base_url, "_refresh", NULL);
 
