@@ -21,10 +21,11 @@
 struct elastic_search_context {
     pool_t pool;
     const char *box_guid;
+    const char *scroll_id;
     uint32_t uid;
     float score;
     struct fts_result *result;
-    bool found;
+    int found;
 };
 
 
@@ -35,7 +36,7 @@ struct elastic_connection {
     /* ElasticSearch HTTP API information */
     char *http_host;
     in_port_t http_port;
-    char *http_base_url;
+    char *http_base_path;
     char *http_failure;
     int request_status;
 
@@ -89,7 +90,7 @@ int elastic_connection_init(const struct fts_elastic_settings *set,
     conn->http_host = i_strdup(http_url->host_name);
 #endif
     conn->http_port = http_url->port;
-    conn->http_base_url = i_strconcat(http_url->path, http_url->enc_query, NULL);
+    conn->http_base_path = i_strdup(http_url->path);
     conn->http_ssl = http_url->have_ssl;
     conn->debug = set->debug;
     conn->refresh_on_update = set->refresh_on_update;
@@ -118,7 +119,7 @@ void elastic_connection_deinit(struct elastic_connection *conn)
 {
     if (conn != NULL) {
         i_free(conn->http_host);
-        i_free(conn->http_base_url);
+        i_free(conn->http_base_path);
         i_free(conn->ctx);
         json_tokener_free(conn->tok);
         i_free(conn);
@@ -160,7 +161,7 @@ elastic_connection_payload_input(struct elastic_connection *conn)
                 i_error("fts_elastic: json response not finished");
         } else if (jerr == json_tokener_success) {
             /* extract values from resulting json object */
-            jobj_parse(conn, jobj);
+            elastic_connection_json(conn, jobj);
         } else {
             i_error("fts_elastic: json tokener error: %s", json_tokener_error_desc(jerr));
             break;
@@ -186,16 +187,17 @@ static void
 elastic_connection_search_response(const struct http_response *response,
                                    struct elastic_connection *conn)
 {
-    /* 404's usually mean the index is missing. it could mean you also hit a
-     * non-ES service but this seems better than a second indices exists lookup */
+    /* 404's usually mean the index is missing.
+     * it could mean you also hit a non-ES service
+     * 400 means request json is malformed */
     if (response->status / 100 != 2) {
-        i_error("fts_elastic: lookup failed: %s", response->reason);
+        i_error("fts_elastic: search failed: %d %s",
+                    response->status, response->reason);
         conn->request_status = -1;
-        return;
     }
 
     if (response->payload == NULL) {
-        i_error("fts_elastic: lookup failed: empty response payload");
+        i_error("fts_elastic: search failed: empty response payload");
         conn->request_status = -1;
         return;
     }
@@ -222,30 +224,36 @@ elastic_connection_http_response(const struct http_response *response,
             elastic_connection_bulk_response(response, conn);
             break;
         case ELASTIC_POST_TYPE_REFRESH:
+        case ELASTIC_POST_TYPE_DELETE:
             /* not implemented */
             break;
         }
     }
 }
 
-/* Performs HTTP POST request
+/* Performs HTTP POST/DELETE request
  * with callback to elastic_connection_http_response */
 int elastic_connection_post(struct elastic_connection *conn,
-                            const char *url, string_t *data)
+                            const char *path, string_t *data)
 {
     struct http_client_request *http_req = NULL;
     struct istream *post_payload = NULL;
+    const char *method = "POST";
 
-    if (conn == NULL || url == NULL || data == NULL) {
+    if (conn == NULL || path == NULL || data == NULL) {
         i_error("fts_elastic: connection_post: critical error during POST");
         return -1;
     }
 
-    http_req = http_client_request(elastic_http_client, "POST", conn->http_host,
-                                   url, elastic_connection_http_response, conn);
+    if (conn->post_type == ELASTIC_POST_TYPE_DELETE) {
+        method = "DELETE";
+    }
+
+    http_req = http_client_request(elastic_http_client, method, conn->http_host,
+                                   path, elastic_connection_http_response, conn);
     http_client_request_set_port(http_req, conn->http_port);
     http_client_request_set_ssl(http_req, conn->http_ssl);
-    /* should be application/x-ndjson for bulk updates, but why when it works? */
+    /* XXX: should be application/x-ndjson for bulk updates, but why when this works? */
     http_client_request_add_header(http_req, "Content-Type", "application/json");
 
     post_payload = i_stream_create_from_buffer(data);
@@ -310,7 +318,7 @@ void elastic_connection_search_hits(struct elastic_search_context *ctx,
             }
             */
             seq_range_array_add(&ctx->result->definite_uids, ctx->uid);
-            ctx->found = TRUE;
+            ctx->found += 1;
 
             /* parse user from _id
             tmp++;
@@ -334,15 +342,27 @@ void elastic_connection_search_hits(struct elastic_search_context *ctx,
 }
 
 
-void jobj_parse(struct elastic_connection *conn, json_object *jobj)
+/* extract values from resulting json object */
+void elastic_connection_json(struct elastic_connection *conn, json_object *jobj)
 {
     struct json_object *jvalue = NULL;
 
     i_assert(jobj != NULL);
 
+    /* Check for error description */
+    if (json_object_object_get_ex(jobj, "error", &jvalue)) {
+        i_error("fts_elastic: %s", json_object_get_string(jvalue));
+        return;
+    }
+
     /* Check if errors are present in response */
     if (json_object_object_get_ex(jobj, "errors", &jvalue)) {
         i_error("fts_elastic: errors in response");
+    }
+
+    /* Check if _scroll_id are present in response */
+    if (json_object_object_get_ex(jobj, "_scroll_id", &jvalue)) {
+        conn->ctx->scroll_id = p_strdup(conn->ctx->pool, json_object_get_string(jvalue));
     }
 
     switch (conn->post_type) {
@@ -358,9 +378,8 @@ void jobj_parse(struct elastic_connection *conn, json_object *jobj)
         elastic_connection_search_hits(conn->ctx, jvalue);
         break;
     case ELASTIC_POST_TYPE_BULK:
-        /* not implemented */
-        break;
     case ELASTIC_POST_TYPE_REFRESH:
+    case ELASTIC_POST_TYPE_DELETE:
         /* not implemented */
         break;
     }
@@ -371,7 +390,7 @@ void jobj_parse(struct elastic_connection *conn, json_object *jobj)
  */
 int elastic_connection_bulk(struct elastic_connection *conn, string_t *cmd)
 {
-    const char *url = NULL;
+    const char *path = NULL;
 
     if (conn == NULL || cmd == NULL) {
         i_error("fts_elastic: connection_bulk: conn or cmd is NULL");
@@ -379,18 +398,18 @@ int elastic_connection_bulk(struct elastic_connection *conn, string_t *cmd)
     }
 
     conn->post_type = ELASTIC_POST_TYPE_BULK;
-    url = t_strconcat(conn->http_base_url, "_bulk"
+    path = t_strconcat(conn->http_base_path, "_bulk"
                         "?routing=", conn->username,
                         conn->refresh_on_update ? "&refresh=true" : "",
                         NULL);
-    elastic_connection_post(conn, url, cmd);
+    elastic_connection_post(conn, path, cmd);
     return conn->request_status;
 }
 
 
 int elastic_connection_refresh(struct elastic_connection *conn)
 {
-    const char *url = NULL;
+    const char *path = NULL;
     string_t *query = t_str_new_const("", 0);
 
     if (conn == NULL) {
@@ -399,8 +418,8 @@ int elastic_connection_refresh(struct elastic_connection *conn)
     }
 
     conn->post_type = ELASTIC_POST_TYPE_REFRESH;
-    url = t_strconcat(conn->http_base_url, "_refresh", NULL);
-    elastic_connection_post(conn, url, query);
+    path = t_strconcat(conn->http_base_path, "_refresh", NULL);
+    elastic_connection_post(conn, path, query);
 
     if (conn->request_status < 0)
         return -1;
@@ -416,10 +435,10 @@ int elastic_connection_search(struct elastic_connection *conn,
                               pool_t pool, string_t *query,
                               struct fts_result *result_r)
 {
-    const char *url = NULL;
+    const char *path = NULL;
 
     if (conn == NULL || query == NULL || result_r == NULL) {
-        i_error("fts_elastic: select: critical error during select");
+        i_error("fts_elastic: critical error during search");
         return -1;
     }
 
@@ -429,14 +448,73 @@ int elastic_connection_search(struct elastic_connection *conn,
     conn->ctx->uid = -1;
     conn->ctx->score = -1;
     conn->ctx->result = result_r;
-    conn->ctx->found = FALSE;
+    conn->ctx->found = 0;
     conn->post_type = ELASTIC_POST_TYPE_SEARCH;
 
 	i_free_and_null(conn->http_failure);
     json_tokener_reset(conn->tok);
 
-    url = t_strconcat(conn->http_base_url, "_search?routing=", conn->username, NULL);
-    elastic_connection_post(conn, url, query);
+    path = t_strconcat(conn->http_base_path, "_search?routing=", conn->username, NULL);
+    elastic_connection_post(conn, path, query);
+
+    if (conn->request_status < 0)
+        return -1;
+
+    return conn->ctx->found;
+}
+
+/* Performs elastic search query with scroll
+ * parses json response
+ * and fills fts_result
+ */
+int elastic_connection_search_scroll(struct elastic_connection *conn,
+                              pool_t pool, string_t *query,
+                              struct fts_result *result_r)
+{
+    const char *SCROLL_TIMEOUT = "1m";
+    const char *path = NULL;
+
+    if (conn == NULL || query == NULL || result_r == NULL) {
+        i_error("fts_elastic: critical error during search scroll");
+        return -1;
+    }
+
+    i_zero(conn->ctx);
+    i_assert(conn->ctx != NULL);
+    conn->ctx->pool = pool;
+    conn->ctx->uid = -1;
+    conn->ctx->score = -1;
+    conn->ctx->result = result_r;
+    conn->ctx->found = 0;
+    conn->post_type = ELASTIC_POST_TYPE_SEARCH;
+
+	i_free_and_null(conn->http_failure);
+    json_tokener_reset(conn->tok);
+
+    path = t_strconcat(conn->http_base_path, "_search?routing=", conn->username,
+                        "&scroll=", SCROLL_TIMEOUT, NULL);
+    elastic_connection_post(conn, path, query);
+
+    if (conn->ctx->scroll_id == NULL) {
+        i_error("fts_elastic: _scroll_id not found in scroll response");
+        return 0;
+    }
+
+    /* TODO: strip index (last segment) from path to allow elastic behind proxy */
+    path = "/_search/scroll";
+    while (conn->ctx->found >= 9998) {
+        conn->ctx->found = 0;
+        str_truncate(query, 0);
+        str_printfa(query, "{\"scroll\":\"%s\", \"scroll_id\":\"%s\"}",
+                            SCROLL_TIMEOUT,
+                            conn->ctx->scroll_id);
+        elastic_connection_post(conn, path, query);
+    }
+    /* DELETE search scroll context */
+    conn->post_type = ELASTIC_POST_TYPE_DELETE;
+    str_truncate(query, 0);
+    str_printfa(query, "{\"scroll_id\":\"%s\"}", conn->ctx->scroll_id);
+    elastic_connection_post(conn, path, query);
 
     if (conn->request_status < 0)
         return -1;

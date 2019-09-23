@@ -703,6 +703,7 @@ fts_backend_elastic_lookup(struct fts_backend *_backend, struct mailbox *box,
 
     struct elastic_fts_backend *backend = (struct elastic_fts_backend *)_backend;
     const char *operator_arg = (flags & FTS_LOOKUP_FLAG_AND_ARGS) ? "and" : "or";
+	struct mailbox_status status;
     const char *box_guid = NULL;
 
     /* temp variables */
@@ -723,6 +724,8 @@ fts_backend_elastic_lookup(struct fts_backend *_backend, struct mailbox *box,
     /* get the mailbox guid */
     if (fts_mailbox_get_guid(box, &box_guid) < 0)
         return -1;
+
+    mailbox_get_open_status(box, STATUS_MESSAGES, &status);
 
     /* attempt to build the query */
     if (!elastic_add_definite_query_args(fields, fields_not, query, args)) {
@@ -764,7 +767,12 @@ fts_backend_elastic_lookup(struct fts_backend *_backend, struct mailbox *box,
     /* build our fts_result return */
     result_r->box = box;
     result_r->scores_sorted = FALSE;
-    ret = elastic_connection_search(backend->conn, pool, cmd, result_r);
+
+    if (status.messages > 10000) {
+        ret = elastic_connection_search_scroll(backend->conn, pool, cmd, result_r);
+    } else {
+        ret = elastic_connection_search(backend->conn, pool, cmd, result_r);
+    }
 
     /* FTS_LOOKUP_FLAG_NO_AUTO_FUZZY says that exact matches for non-fuzzy searches
      * should go to maybe_uids instead of definite_uids. */
