@@ -20,11 +20,8 @@
 
 struct elastic_search_context {
     pool_t pool;
-    const char *box_guid;
     const char *scroll_id;
-    uint32_t uid;
-    float score;
-    struct fts_result *result;
+	struct fts_result *result;
     int found;
 };
 
@@ -231,8 +228,7 @@ elastic_connection_http_response(const struct http_response *response,
     }
 }
 
-/* Performs HTTP POST/DELETE request
- * with callback to elastic_connection_http_response */
+/* Performs HTTP POST/DELETE request with callback */
 int elastic_connection_post(struct elastic_connection *conn,
                             const char *path, string_t *data)
 {
@@ -274,13 +270,14 @@ int elastic_connection_post(struct elastic_connection *conn,
 void elastic_connection_search_hits(struct elastic_search_context *ctx,
                                     struct json_object *hits)
 {
-    struct fts_score_map *tmp_score = NULL;
+    struct fts_score_map *scores;
     struct json_object *hit;
     struct json_object *jval;
+    uint32_t uid = 0;
     int hits_count = 0;
     int i = 0;
     const char *_id;
-    const char *const *tmp;
+    const char *const *id_part;
 
     if (ctx == NULL || hits == NULL) {
         i_error("fts_elastic: select_json: critical error while processing result JSON");
@@ -292,52 +289,50 @@ void elastic_connection_search_hits(struct elastic_search_context *ctx,
         return;
     }
 
-    ctx->box_guid = "";
     hits_count = json_object_array_length(hits);
     for (i = 0; i < hits_count; i++) {
         hit = json_object_array_get_idx(hits, i);
-        if (json_object_object_get_ex(hit, "_id", &jval)) {
-            _id = json_object_get_string(jval);
-            tmp = t_strsplit_spaces(_id, "/");
-            if (str_to_uint32(*tmp, &ctx->uid) < 0 || ctx->uid == 0) {
-                i_warning("fts_elastic: uid <= 0 in _id:\"%s\"", _id);
-                continue;
-            }
-            /* currently we handle searches only for single mailbox
-            tmp++;
-            if (*tmp == NULL) {
-                i_warning("fts_elastic: mbox_guid not found in _id:\"%s\"", _id);
-                ctx->box_guid = "";
-                continue;
-            }
-            if (strcmp(ctx->box_guid, *tmp) != 0) {
-                ctx->box_guid = p_strdup(ctx->pool, *tmp);
-                result = elastic_result_get(conn, ctx->box_guid);
-            } else {
-                // We are using already box result from previous hit
-            }
-            */
-            seq_range_array_add(&ctx->result->definite_uids, ctx->uid);
-            ctx->found += 1;
-
-            /* parse user from _id
-            tmp++;
-            if (*tmp == NULL) {
-                i_warning("fts_elastic: user not found in _id:\"%s\"", _id);
-                continue;
-            }
-            user = p_strdup(ctx->pool, *tmp);
-            */
-        } else {
+        if (!json_object_object_get_ex(hit, "_id", &jval)) {
             i_warning("fts_elastic: key _id not in search response hit:%s",
-                            json_object_to_json_string(hit));
+                        json_object_to_json_string(hit));
             continue;
         }
-        if (json_object_object_get_ex(hit, "_score", &jval)) {
-            tmp_score = array_append_space(&ctx->result->scores);
-            tmp_score->uid = ctx->uid;
-            tmp_score->score = json_object_get_double(jval);
+
+        _id = json_object_get_string(jval);
+        id_part = t_strsplit_spaces(_id, "/");
+        if (str_to_uint32(*id_part, &uid) < 0 || uid == 0) {
+            i_warning("fts_elastic: uid <= 0 in _id:\"%s\"", _id);
+            continue;
         }
+        /* we currently search only in one mbox
+        id_part++;
+        if (*id_part == NULL) {
+            i_warning("fts_elastic: mbox_guid not found in _id:\"%s\"", _id);
+            guid = "";
+            continue;
+        }
+        if (strcmp(guid, *id_part) != 0) {
+            ctx->result = get_fts_result_by_guid(ctx, *id_part);
+        } else {
+            // We are using already box result from previous hit
+        }
+        */
+        ctx->found += 1;
+        if (seq_range_array_add(&ctx->result->definite_uids, uid)) {
+            /* duplicate result */
+        } else if (json_object_object_get_ex(hit, "_score", &jval)) {
+            scores = array_append_space(&ctx->result->scores);
+            scores->uid = uid;
+            scores->score = json_object_get_double(jval);
+        }
+        /* parse user from _id
+        id_part++;
+        if (*id_part == NULL) {
+            i_warning("fts_elastic: user not found in _id:\"%s\"", _id);
+            continue;
+        }
+        user = p_strdup(ctx->pool, *id_part);
+        */
     }
 }
 
@@ -443,10 +438,7 @@ int elastic_connection_search(struct elastic_connection *conn,
     }
 
     i_zero(conn->ctx);
-    i_assert(conn->ctx != NULL);
     conn->ctx->pool = pool;
-    conn->ctx->uid = -1;
-    conn->ctx->score = -1;
     conn->ctx->result = result_r;
     conn->ctx->found = 0;
     conn->post_type = ELASTIC_POST_TYPE_SEARCH;
@@ -471,7 +463,7 @@ int elastic_connection_search_scroll(struct elastic_connection *conn,
                               pool_t pool, string_t *query,
                               struct fts_result *result_r)
 {
-    const char *SCROLL_TIMEOUT = "1m";
+    static const char *SCROLL_TIMEOUT = "7s";
     const char *path = NULL;
 
     if (conn == NULL || query == NULL || result_r == NULL) {
@@ -482,8 +474,6 @@ int elastic_connection_search_scroll(struct elastic_connection *conn,
     i_zero(conn->ctx);
     i_assert(conn->ctx != NULL);
     conn->ctx->pool = pool;
-    conn->ctx->uid = -1;
-    conn->ctx->score = -1;
     conn->ctx->result = result_r;
     conn->ctx->found = 0;
     conn->post_type = ELASTIC_POST_TYPE_SEARCH;

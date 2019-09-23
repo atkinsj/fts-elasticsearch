@@ -577,23 +577,59 @@ static int fts_backend_elastic_refresh(struct fts_backend *_backend ATTR_UNUSED)
     return 0;
 }
 
-static int fts_backend_elastic_rescan(struct fts_backend *_backend ATTR_UNUSED)
+/* TODO: implement proper rescan */
+static int fts_backend_elastic_rescan(struct fts_backend *_backend)
 {
-/* 
- 	struct elastic_fts_backend *backend =
-		(struct elastic_fts_backend *)_backend;
-    struct fts_result ***results = NULL;
- */
-    // TODO: implement proper rescan
+    static const char JSON_RESCAN[] =
+        "{"
+            "\"query\":{"
+                "\"bool\":{"
+                    "\"filter\":["
+                        "{\"term\":{\"user\":\"%s\"}}."
+                        "{\"term\":{\"box\":\"%s\"}}"
+                    "]"
+                "}"
+            "},"
+            "\"_source\":false,"
+            "\"size\":10000"
+        "}";
+
+    struct elastic_fts_backend *backend = (struct elastic_fts_backend *)_backend;
+	char box_guid[MAILBOX_GUID_HEX_LENGTH+1];
+    pool_t pool;
+    string_t *cmd;
+    uint32_t uid;
+    struct fts_result *result;
+    int ret;
+
+    /* ensure our backend has been initialised */
+    if (_backend == NULL) {
+        i_error("fts_elastic: critical error in rescan");
+        return -1;
+    }
+
+    pool = pool_alloconly_create("elastic search", 1024);
+    cmd = str_new(pool, 256);
+
     // build json query for all user boxes
+    str_printfa(cmd, JSON_RESCAN, box_guid,
+                _backend->ns->owner ? _backend->ns->owner->username : "-");
+
     // download all uids for all boxes from elastic
-    //  sorted by box, uid
-    // needs result paging
+    ret = elastic_connection_search(backend->conn, pool, cmd, result);
+
     // iterate (box, uid) pairs
     // open box if not opened
     // compare uids find missing/expunged
     // return elastic_connection_rescan(backend->conn, &results);
-    return 0;
+    // DELETE all other non existing mailboxes from elastic
+
+    pool_unref(&pool);
+    str_free(&cmd);
+
+    if (ret < 0)
+        return -1;
+    return ret;
 }
 
 static int fts_backend_elastic_optimize(struct fts_backend *backend ATTR_UNUSED)

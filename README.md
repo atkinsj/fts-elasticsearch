@@ -2,6 +2,7 @@
 fts-elastic is a [Dovecot full-text search](https://doc.dovecot.org/configuration_manual/fts/) indexing plugin that uses [ElasticSearch](https://www.elastic.co/) as a backend.
 
 Dovecot communicates to ES using HTTP/JSON queries. It supports automatic indexing and searching of e-mail.
+For mailboxes with more than 10000 messages it uses [elastic scroll API](https://www.elastic.co/guide/en/elasticsearch/reference/current/search-request-body.html#request-body-search-scroll).
 
 ## Requirements
 * Dovecot 2.2+
@@ -70,20 +71,20 @@ doveadm index -u user@domain -q '*'
 
 An example of pushed document:
 ```json
-	{
-		"user": "filip.hanes@example.com",
-		"box": "f40efa2f8f44ad54424000006e8130ae",
-		"uid": 3,
-		"date": "Thu, 08 Jan 2015 00:20:05 +0000",
-		"from": "josh <josh@localhost.localdomain>",
-		"sender": "Filip Hanes",
-		"to": "<filip.hanes@example.com>",
-		"cc": "User <user@example.com>",
-		"bcc": "\"Test User\" <test@example.com>",
-		"subject": "Test #3",
-		"message-id": "<20150107132005.07DA3140314@example.com>",
-		"body": "This is the body of test #3.\n"
-	}
+{
+  "user": "filip.hanes@example.com",
+  "box": "f40efa2f8f44ad54424000006e8130ae",
+  "uid": 3,
+  "date": "Thu, 08 Jan 2015 00:20:05 +0000",
+  "from": "josh <josh@localhost.localdomain>",
+  "sender": "Filip Hanes",
+  "to": "<filip.hanes@example.com>",
+  "cc": "User <user@example.com>",
+  "bcc": "\"Test User\" <test@example.com>",
+  "subject": "Test #3",
+  "message-id": "<20150107132005.07DA3140314@example.com>",
+  "body": "This is the body of test #3.\n"
+}
 ```
 
 An example search:
