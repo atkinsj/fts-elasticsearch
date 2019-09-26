@@ -14,6 +14,7 @@ enum elastic_post_type {
     ELASTIC_POST_TYPE_SEARCH,
     ELASTIC_POST_TYPE_REFRESH,
     ELASTIC_POST_TYPE_DELETE,
+    ELASTIC_POST_TYPE_DELETE_BY_QUERY,
 };
 
 struct elastic_result {
@@ -59,5 +60,8 @@ int elastic_connection_search_scroll(struct elastic_connection *conn,
 int elastic_connection_rescan(struct elastic_connection *conn,
                               pool_t pool, string_t *query,
                               struct fts_result **results_r);
+
+int elastic_connection_delete_by_query(struct elastic_connection *conn,
+                                       pool_t pool, string_t *query);
 
 #endif

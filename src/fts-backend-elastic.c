@@ -398,13 +398,13 @@ fts_backend_elastic_bulk_start(struct elastic_fts_backend_update_context *_ctx,
     struct elastic_fts_backend_update_context *ctx =
         (struct elastic_fts_backend_update_context *)_ctx;
 
-    /* track that we've added documents */
-    ctx->documents_added = TRUE;
-
     /* add the header that starts the bulk transaction */
     /* _id consists of uid/box_guid/user */
     str_printfa(ctx->json_request, "{\"%s\":{\"_id\":\"%u/%s/%s\"}}\n",
                             action_name, ctx->uid, ctx->box_guid, ctx->username);
+
+    /* track that we've added documents */
+    ctx->documents_added = TRUE;
 
     /* expunges don't need anything more than the action line */
     if (!ctx->expunges) {
@@ -564,7 +564,7 @@ fts_backend_elastic_update_expunge(struct fts_backend_update_context *_ctx,
     fts_backend_elastic_bulk_start(ctx, "delete");
 }
 
-static int fts_backend_elastic_refresh(struct fts_backend *_backend ATTR_UNUSED)
+static int fts_backend_elastic_refresh(struct fts_backend *_backend)
 {
     struct elastic_fts_backend *backend =
         (struct elastic_fts_backend *)_backend;
@@ -577,30 +577,45 @@ static int fts_backend_elastic_refresh(struct fts_backend *_backend ATTR_UNUSED)
     return 0;
 }
 
-/* TODO: implement proper rescan */
+/* delete uids in bulk */
+static int
+fts_backend_elastic_expunge_uids(struct fts_backend *_backend,
+                                 struct mailbox *box,
+                                 ARRAY_TYPE(seq_range) uids)
+{
+    uint32_t uid;
+    unsigned int i;
+    struct seq_range_iter iter;
+    struct fts_backend_update_context *update_ctx =
+                fts_backend_elastic_update_init(_backend);
+
+    fts_backend_elastic_update_set_mailbox(update_ctx, box);
+
+    seq_range_array_iter_init(&iter, &uids);
+    i = 0;
+    while (seq_range_array_iter_nth(&iter, i++, &uid)) {
+        fts_backend_elastic_update_expunge(update_ctx, uid);
+    }
+    fts_backend_elastic_update_deinit(update_ctx);
+
+    return 0;
+}
+
+/* implement proper rescan */
 static int fts_backend_elastic_rescan(struct fts_backend *_backend)
 {
-    static const char JSON_RESCAN[] =
-        "{"
-            "\"query\":{"
-                "\"bool\":{"
-                    "\"filter\":["
-                        "{\"term\":{\"user\":\"%s\"}}."
-                        "{\"term\":{\"box\":\"%s\"}}"
-                    "]"
-                "}"
-            "},"
-            "\"_source\":false,"
-            "\"size\":10000"
-        "}";
-
     struct elastic_fts_backend *backend = (struct elastic_fts_backend *)_backend;
-	char box_guid[MAILBOX_GUID_HEX_LENGTH+1];
     pool_t pool;
     string_t *cmd;
+    string_t *existing_guids;
+    const char *username = "-";
+    struct mailbox *box = NULL;
+	const char *box_guid;
     uint32_t uid;
     struct fts_result *result;
-    int ret;
+    ARRAY_TYPE(seq_range) uids;
+    ARRAY_TYPE(seq_range) expunged_uids;
+    int ret = 0;
 
     /* ensure our backend has been initialised */
     if (_backend == NULL) {
@@ -608,24 +623,150 @@ static int fts_backend_elastic_rescan(struct fts_backend *_backend)
         return -1;
     }
 
-    pool = pool_alloconly_create("elastic search", 1024);
+    pool = pool_alloconly_create("elastic rescan", 32*1024);
     cmd = str_new(pool, 256);
+    existing_guids = str_new(pool, 512);
+    p_array_init(&uids, pool, 4*1024);
+    p_array_init(&expunged_uids, pool, 512);
+    result = p_new(pool, struct fts_result, 1);
+    p_array_init(&result->definite_uids, pool, 8*1024);
+    p_array_init(&result->maybe_uids, pool, 2);
+    p_array_init(&result->scores, pool, 2);
+    if (backend->backend.ns->owner) {
+        username = backend->backend.ns->owner->username;
+    }
 
-    // build json query for all user boxes
-    str_printfa(cmd, JSON_RESCAN, box_guid,
-                _backend->ns->owner ? _backend->ns->owner->username : "-");
+	struct seq_range_iter iter;
+	const struct mailbox_info *info;
+    struct mailbox_status status;
+	const enum mailbox_list_iter_flags iter_flags =
+		(enum mailbox_list_iter_flags)
+		(MAILBOX_LIST_ITER_NO_AUTO_BOXES |
+		 MAILBOX_LIST_ITER_RETURN_NO_FLAGS);
+	struct mailbox_list_iterate_context *list_iter =
+            mailbox_list_iter_init(backend->backend.ns->list, "*", iter_flags);
 
-    // download all uids for all boxes from elastic
-    ret = elastic_connection_search(backend->conn, pool, cmd, result);
+    // go throught existing boxes
+	while ((info = mailbox_list_iter_next(list_iter)) != NULL) {
+        if (box != NULL)
+            mailbox_free(&box);
+        box = mailbox_alloc(backend->backend.ns->list, info->vname, (enum mailbox_flags)0);
+        if (mailbox_open(box) < 0) {
+            enum mail_error error;
+            const char *errstr;
+            errstr = mailbox_get_last_internal_error(box, &error);
+            if (error == MAIL_ERROR_NOTFOUND)
+                ret = 0;
+            else {
+                i_error("fts_elastic: Couldn't open mailbox %s: %s",
+                    mailbox_get_vname(box), errstr);
+                ret = -1;
+            }
+            continue;
+        }
+        if (mailbox_sync(box, (enum mailbox_sync_flags)0) < 0) {
+            i_error("fts_elastic: Failed to sync mailbox %s: %s",
+                mailbox_get_vname(box),
+                mailbox_get_last_internal_error(box, NULL));
+            continue;
+        }
 
-    // iterate (box, uid) pairs
-    // open box if not opened
-    // compare uids find missing/expunged
-    // return elastic_connection_rescan(backend->conn, &results);
-    // DELETE all other non existing mailboxes from elastic
+        array_clear(&uids);
 
+        if (mailbox_get_status(box, STATUS_MESSAGES, &status) < 0){
+            i_error("fts_elastic: Failed to get status for mailbox %s",
+                    mailbox_get_vname(box));
+            continue;
+        }
+
+        if (status.messages > 0) T_BEGIN {
+            ARRAY_TYPE(seq_range) seqs;
+            t_array_init(&seqs, 2);
+            seq_range_array_add_range(&seqs, 1, status.messages);
+            mailbox_get_uid_range(box, &seqs, &uids);
+        } T_END;
+
+        /* get the mailbox guid */
+        if (fts_mailbox_get_guid(box, &box_guid) < 0) {
+            i_error("fts_elastic: Failed to get guid for mailbox %s",
+                    mailbox_get_vname(box));
+            continue;
+        }
+        str_printfa(existing_guids, "\"%s\",", box_guid);
+
+        result->box = box;
+    	array_clear(&result->definite_uids);
+
+        /* build json query for user box */
+        str_truncate(cmd, 0);
+        str_printfa(cmd,
+            "{"
+                "\"query\":{"
+                    "\"bool\":{"
+                        "\"filter\":["
+                            "{\"term\":{\"user\":\"%s\"}},"
+                            "{\"term\":{\"box\":\"%s\"}}"
+                        "]"
+                    "}"
+                "},"
+                "\"_source\":false,"
+                "\"size\":10000"
+            "}",
+            username, box_guid);
+
+        // download all uids for all boxes from elastic
+        // we need scroll request because we don't know in advance
+        // how many messages are actually in elastic
+        // the point of rescan is to remove expunges and fix elastic
+        ret = elastic_connection_search_scroll(backend->conn, pool, cmd, result);
+        if (ret < 0) {
+            i_error("fts_elastic: Failed to search uids in elastic for mailbox %s",
+                    mailbox_get_vname(box));
+            continue;
+        }
+        array_clear(&expunged_uids);
+        array_append_array(&expunged_uids, &result->definite_uids);
+
+        /* find not existing uids (expunged) and delete them */
+        seq_range_array_remove_seq_range(&expunged_uids, &uids);
+        fts_backend_elastic_expunge_uids(_backend, box, expunged_uids);
+
+        /* find missing and set last uid before first missing uid */
+        seq_range_array_remove_seq_range(&uids, &result->definite_uids);
+        seq_range_array_iter_init(&iter, &uids);
+        if (seq_range_array_iter_nth(&iter, 0, &uid)) {
+            fts_index_set_last_uid(box, uid-1);
+        }
+    }
+	(void)mailbox_list_iter_deinit(&list_iter);
+    mailbox_free(&box);
+
+    /* DELETE all other non existing mailboxes user */
+    if (str_len(existing_guids) > 0) {
+        /* remove trailing ',' */
+        str_delete(existing_guids, str_len(existing_guids) - 1, 1);
+    }
+    str_truncate(cmd, 0);
+    str_printfa(cmd,
+        "{"
+            "\"query\":{"
+                "\"bool\":{"
+                    "\"filter\":{\"term\":{\"user\":\"%s\"}},"
+                    "\"must_not\":{\"terms\":{\"box\":[%s]}}"
+                "}"
+            "}"
+        "}", username, str_c(existing_guids));
+    ret = elastic_connection_delete_by_query(backend->conn, pool, cmd);
+
+    /* cleanup */
     pool_unref(&pool);
     str_free(&cmd);
+    str_free(&existing_guids);
+	array_free(&uids);
+	array_free(&expunged_uids);
+	array_free(&result->definite_uids);
+	array_free(&result->maybe_uids);
+	array_free(&result->scores);
 
     if (ret < 0)
         return -1;

@@ -222,6 +222,7 @@ elastic_connection_http_response(const struct http_response *response,
             break;
         case ELASTIC_POST_TYPE_REFRESH:
         case ELASTIC_POST_TYPE_DELETE:
+        case ELASTIC_POST_TYPE_DELETE_BY_QUERY:
             /* not implemented */
             break;
         }
@@ -375,6 +376,7 @@ void elastic_connection_json(struct elastic_connection *conn, json_object *jobj)
     case ELASTIC_POST_TYPE_BULK:
     case ELASTIC_POST_TYPE_REFRESH:
     case ELASTIC_POST_TYPE_DELETE:
+    case ELASTIC_POST_TYPE_DELETE_BY_QUERY:
         /* not implemented */
         break;
     }
@@ -504,6 +506,34 @@ int elastic_connection_search_scroll(struct elastic_connection *conn,
     conn->post_type = ELASTIC_POST_TYPE_DELETE;
     str_truncate(query, 0);
     str_printfa(query, "{\"scroll_id\":\"%s\"}", conn->ctx->scroll_id);
+    elastic_connection_post(conn, path, query);
+
+    if (conn->request_status < 0)
+        return -1;
+
+    return conn->ctx->found;
+}
+
+/* Performs elastic search delete by query
+ */
+int elastic_connection_delete_by_query(struct elastic_connection *conn,
+                                       pool_t pool, string_t *query)
+{
+    const char *path = NULL;
+
+    if (conn == NULL || query == NULL) {
+        i_error("fts_elastic: critical error during search scroll");
+        return -1;
+    }
+
+    i_zero(conn->ctx);
+    conn->ctx->pool = pool;
+    conn->post_type = ELASTIC_POST_TYPE_DELETE_BY_QUERY;
+
+	i_free_and_null(conn->http_failure);
+
+    path = t_strconcat(conn->http_base_path, "_delete_by_query?routing=",
+                                                    conn->username, NULL);
     elastic_connection_post(conn, path, query);
 
     if (conn->request_status < 0)

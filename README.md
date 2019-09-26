@@ -115,9 +115,8 @@ curl -X POST "http://elasticIP:9200/m/_search?pretty" -H 'Content-Type: applicat
 ```
 
 ## TODO
-* Rescan
-* Multiple mailbox lookup (for clients that call lookup_multi; need to find one)
 * user/mbox_guid parametrized url i.e.: url=http://127.0.0.1/m-%u/ would use index http://127.0.0.1/m-filip.hanes@example.com/
+* Multiple mailbox lookup (for clients that call lookup_multi; need to find one)
 * Optimisation (if any)
 
 ## Thanks
