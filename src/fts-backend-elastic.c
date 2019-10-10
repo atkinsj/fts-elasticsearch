@@ -653,21 +653,30 @@ static int fts_backend_elastic_rescan(struct fts_backend *_backend)
         box = mailbox_alloc(backend->backend.ns->list, info->vname, (enum mailbox_flags)0);
         if (mailbox_open(box) < 0) {
             enum mail_error error;
-            const char *errstr;
-            errstr = mailbox_get_last_internal_error(box, &error);
             if (error == MAIL_ERROR_NOTFOUND)
                 ret = 0;
             else {
+#if defined(DOVECOT_PREREQ) && DOVECOT_PREREQ(2,2)
                 i_error("fts_elastic: Couldn't open mailbox %s: %s",
-                    mailbox_get_vname(box), errstr);
+                    mailbox_get_vname(box),
+                    mailbox_get_last_internal_error(box, &error));
+#else
+                i_error("fts_elastic: Couldn't open mailbox %s",
+                    mailbox_get_vname(box));
+#endif
                 ret = -1;
             }
             continue;
         }
         if (mailbox_sync(box, (enum mailbox_sync_flags)0) < 0) {
+#if defined(DOVECOT_PREREQ) && DOVECOT_PREREQ(2,2)
             i_error("fts_elastic: Failed to sync mailbox %s: %s",
                 mailbox_get_vname(box),
                 mailbox_get_last_internal_error(box, NULL));
+#else
+            i_error("fts_elastic: Failed to sync mailbox %s",
+                mailbox_get_vname(box));
+#endif
             continue;
         }
 
