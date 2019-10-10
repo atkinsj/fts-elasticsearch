@@ -53,9 +53,13 @@ In dovecot/conf.d/90-plugins.conf:
 This plugin stores all message in one elastic index. You can use [sharding](https://www.elastic.co/guide/en/elasticsearch/reference/current/scalability.html) to support large numbers of users. Since it uses [routing key](https://www.elastic.co/guide/en/elasticsearch/reference/current/mapping-routing-field.html), updates and searches are accessing only one shard.
 _id is in the form "_id":"uid/mbox-guid/user@domain", example: "_id":"3/f40efa2f8f44ad54424000006e8130ae/filip.hanes@example.com"
 
-You can setup [index mapping](https://www.elastic.co/guide/en/elasticsearch/reference/current/mapping.html) on Elasticsearch with command
+You can setup [index mapping](https://www.elastic.co/guide/en/elasticsearch/reference/current/mapping.html) on Elasticsearch 6.x with command
 
-	curl -X PUT "http://elasticIP:9200/m?pretty" -H 'Content-Type: application/json' -d "@elastic-schema.json"
+	curl -X PUT "http://elasticIP:9200/m?pretty" -H 'Content-Type: application/json' -d "@elastic6-schema.json"
+
+on Elasticsearch 7.x there is different date format parser, you need to use different schema:
+
+	curl -X PUT "http://elasticIP:9200/m?pretty" -H 'Content-Type: application/json' -d "@elastic7-schema.json"
 
 Fields box and user needs to be [keyword fields](https://www.elastic.co/guide/en/elasticsearch/reference/current/keyword.html), as you can see in file `elastic-schema.json`.
 In our schema there is [_source](https://www.elastic.co/guide/en/elasticsearch/reference/current/mapping-source-field.html) enabled because we don't see much storage savings when _source is disabled and elastic documentation doesn't recommend it either.
