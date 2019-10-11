@@ -10,6 +10,14 @@
 
 #include <stdlib.h>
 
+#ifndef str_begins
+#if defined(__GNUC__) && (__GNUC__ >= 2)
+/* GCC (and Clang) are known to have a compile-time strlen("literal") shortcut, and
+   an optimised strncmp(), so use that by default. Macro is multi-evaluation safe. */
+# define str_begins(h, n) (__builtin_constant_p(n) ? strncmp((h), (n), strlen(n))==0 : (str_begins)((h), (n)))
+#endif
+#endif
+
 const char *fts_elastic_plugin_version = DOVECOT_ABI_VERSION;
 struct http_client *elastic_http_client = NULL;
 
