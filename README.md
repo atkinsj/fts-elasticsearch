@@ -15,30 +15,38 @@ This plugin needs to compile against the Dovecot source for the version you inte
 
 You can provide the path to your source tree by passing --with-dovecot= to ./configure.
 
+Install dependencies
+
+    # sudo apt install dovecot
+    sudo apt install gcc make libjson-c-dev dovecot-dev
+
 An example build may look like:
 
     ./autogen.sh
     ./configure --with-dovecot=/usr/lib/dovecot/
     make
     make install
-	# optionally
-	sudo ln -s /usr/lib/dovecot/lib21_fts_elastic_plugin.so /usr/lib/dovecot/modules/lib21_fts_elastic_plugin.so
+	  sudo ln -s /usr/lib/dovecot/lib21_fts_elastic_plugin.so /usr/lib/dovecot/modules/lib21_fts_elastic_plugin.so
 
 ## Configuration
-In dovecot/conf.d/10-mail.conf:
+Create /etc/dovecot/conf.d/90-fts.conf with content:
 
-	mail_plugins = fts fts_elastic
-
-In dovecot/conf.d/90-plugins.conf:
+	mail_plugins = $mail_plugins fts fts_elastic
 
 	plugin {
 	  fts = elastic
 	  fts_elastic = debug url=http://localhost:9200/m/ bulk_size=5000000 refresh=fts rawlog_dir=/var/log/fts-elastic/
 
+    # no indexes new emails when user make search
+    # yes indexes every email when delivered
 	  fts_autoindex = no
     fts_autoindex_exclude = \Junk
     fts_autoindex_exclude2 = \Trash
 	}
+
+and (re)start dovecot:
+
+    dovecot stop; dovecot
 
 * url=\<elasticsearch url\> Required elastic URL with index name, must end with slash /
 * bulk_size=\<positive integer\> How large bulk requests we want to send to elastic in bytes (default=5000000)
