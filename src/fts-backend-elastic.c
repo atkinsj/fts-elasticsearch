@@ -387,7 +387,7 @@ elastic_add_update_field(struct elastic_fts_backend_update_context *ctx)
 	field->key = i_strdup(str_c(ctx->current_key));
 	field->value = str_new(default_pool, 256);
     str_append_str(field->value, ctx->current_value);
-	array_push_back(&ctx->fields, field);
+	array_append(&ctx->fields, field, 1);
     return;
 }
 
@@ -525,7 +525,11 @@ fts_backend_elastic_update_build_more(struct fts_backend_update_context *_ctx,
         return -1;
     }
 
+#if defined(DOVECOT_PREREQ) && DOVECOT_PREREQ(2,3)
     str_append_max(ctx->current_value, (const char *)data, size);
+#else
+    str_append_n(ctx->current_value, (const char *)data, size);
+#endif
     return 0;
 }
 
@@ -650,33 +654,33 @@ static int fts_backend_elastic_rescan(struct fts_backend *_backend)
 	while ((info = mailbox_list_iter_next(list_iter)) != NULL) {
         if (box != NULL)
             mailbox_free(&box);
+
+        enum mail_error error;
+        const char *errstr;
         box = mailbox_alloc(backend->backend.ns->list, info->vname, (enum mailbox_flags)0);
         if (mailbox_open(box) < 0) {
-            enum mail_error error;
+#if defined(DOVECOT_PREREQ) && DOVECOT_PREREQ(2,3)
+    		errstr = mailbox_get_last_internal_error(box, &error);
+#else
+    		errstr = mailbox_get_last_error(box, &error);
+#endif
             if (error == MAIL_ERROR_NOTFOUND)
                 ret = 0;
             else {
-#if defined(DOVECOT_PREREQ) && DOVECOT_PREREQ(2,2)
                 i_error("fts_elastic: Couldn't open mailbox %s: %s",
-                    mailbox_get_vname(box),
-                    mailbox_get_last_internal_error(box, &error));
-#else
-                i_error("fts_elastic: Couldn't open mailbox %s",
-                    mailbox_get_vname(box));
-#endif
+                    mailbox_get_vname(box), errstr);
                 ret = -1;
             }
             continue;
         }
         if (mailbox_sync(box, (enum mailbox_sync_flags)0) < 0) {
-#if defined(DOVECOT_PREREQ) && DOVECOT_PREREQ(2,2)
-            i_error("fts_elastic: Failed to sync mailbox %s: %s",
-                mailbox_get_vname(box),
-                mailbox_get_last_internal_error(box, NULL));
+#if defined(DOVECOT_PREREQ) && DOVECOT_PREREQ(2,3)
+    		errstr = mailbox_get_last_internal_error(box, &error);
 #else
-            i_error("fts_elastic: Failed to sync mailbox %s",
-                mailbox_get_vname(box));
+    		errstr = mailbox_get_last_error(box, &error);
 #endif
+            i_error("fts_elastic: Failed to sync mailbox %s: %s",
+                mailbox_get_vname(box), errstr);
             continue;
         }
 
