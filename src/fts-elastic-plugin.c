@@ -10,14 +10,6 @@
 
 #include <stdlib.h>
 
-#ifndef str_begins
-#if defined(__GNUC__) && (__GNUC__ >= 2)
-/* GCC (and Clang) are known to have a compile-time strlen("literal") shortcut, and
-   an optimised strncmp(), so use that by default. Macro is multi-evaluation safe. */
-# define str_begins(h, n) (__builtin_constant_p(n) ? strncmp((h), (n), strlen(n))==0 : (str_begins)((h), (n)))
-#endif
-#endif
-
 const char *fts_elastic_plugin_version = DOVECOT_ABI_VERSION;
 struct http_client *elastic_http_client = NULL;
 
@@ -50,14 +42,14 @@ fts_elastic_plugin_init_settings(struct mail_user *user,
             set->url = p_strdup(user->pool, *tmp + 4);
         } else if (strcmp(*tmp, "debug") == 0) {
             set->debug = TRUE;
-		} else if (str_begins(*tmp, "rawlog_dir=")) {
+		} else if (strncmp(*tmp, "rawlog_dir=", 11)) {
 			set->rawlog_dir = p_strdup(user->pool, *tmp + 11);
-		} else if (str_begins(*tmp, "bulk_size=")) {
+		} else if (strncmp(*tmp, "bulk_size=", 10)) {
 			if (str_to_uint(*tmp+10, &set->bulk_size) < 0 || set->bulk_size == 0) {
 				i_error("fts_elastic: bulk_size must be a positive integer");
                 return -1;
 			}
-		} else if (str_begins(*tmp, "refresh=")) {
+		} else if (strncmp(*tmp, "refresh=", 8)) {
 			if (strcmp(*tmp + 8, "never") == 0) {
 				set->refresh_on_update = FALSE;
 				set->refresh_by_fts = FALSE;
