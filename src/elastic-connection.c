@@ -148,7 +148,7 @@ elastic_connection_payload_input(struct elastic_connection *conn)
     int ret = -1;
 
     /* continue appending data so long as it is available */
-    while ((ret = i_stream_read_more(conn->payload, &data, &size)) > 0) {
+    while ((ret = i_stream_read_data(conn->payload, &data, &size, 0)) > 0) {
         jobj = json_tokener_parse_ex(conn->tok, (const char *)data, size);
         i_stream_skip(conn->payload, size);
 

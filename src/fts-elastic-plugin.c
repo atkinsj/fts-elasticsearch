@@ -42,14 +42,14 @@ fts_elastic_plugin_init_settings(struct mail_user *user,
             set->url = p_strdup(user->pool, *tmp + 4);
         } else if (strcmp(*tmp, "debug") == 0) {
             set->debug = TRUE;
-		} else if (str_begins(*tmp, "rawlog_dir=")) {
+		} else if (strncmp(*tmp, "rawlog_dir=", 11) == 0) {
 			set->rawlog_dir = p_strdup(user->pool, *tmp + 11);
-		} else if (str_begins(*tmp, "bulk_size=")) {
+		} else if (strncmp(*tmp, "bulk_size=", 10) == 0) {
 			if (str_to_uint(*tmp+10, &set->bulk_size) < 0 || set->bulk_size == 0) {
-				i_error("fts_elastic: bulk_size must be a positive integer");
+				i_error("fts_elastic: bulk_size='%s' must be a positive integer", *tmp+10);
                 return -1;
 			}
-		} else if (str_begins(*tmp, "refresh=")) {
+		} else if (strncmp(*tmp, "refresh=", 8) == 0) {
 			if (strcmp(*tmp + 8, "never") == 0) {
 				set->refresh_on_update = FALSE;
 				set->refresh_by_fts = FALSE;

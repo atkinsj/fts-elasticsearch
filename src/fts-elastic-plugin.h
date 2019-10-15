@@ -8,6 +8,11 @@
 #define FTS_ELASTIC_USER_CONTEXT(obj) \
     MODULE_CONTEXT(obj, fts_elastic_user_module)
 
+#ifndef i_zero
+#define i_zero(p) \
+	memset(p, 0 + COMPILE_ERROR_IF_TRUE(sizeof(p) > sizeof(void *)), sizeof(*(p)))
+#endif
+
 struct fts_elastic_settings {
     const char *url;	    /* base URL to an ElasticSearch instance */
     const char *rawlog_dir; /* directory where raw http request and response will be saved */
