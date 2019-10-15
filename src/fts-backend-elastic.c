@@ -256,9 +256,6 @@ fts_backend_elastic_get_last_uid(struct fts_backend *_backend,
 
     pool_unref(&pool);
     str_free(&cmd);
-	array_free(&result->definite_uids);
-	array_free(&result->maybe_uids);
-	array_free(&result->scores);
 
     if (ret < 0)
         return -1;
