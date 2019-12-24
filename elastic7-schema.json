@@ -1,0 +1,37 @@
+{
+    "settings": {
+      "number_of_shards": 10,
+      "number_of_replicas": 0,
+      "analysis": {
+        "normalizer": {
+          "lowercase": {
+            "type": "custom",
+            "char_filter": [],
+            "filter": ["lowercase"]
+          }
+        }
+      }
+    },
+    "mappings": {
+      "_source":  {
+        "enabled": true
+      },
+      "properties": {
+        "user":   {"type": "keyword", "normalizer": "lowercase"},
+        "box":    {"type": "keyword", "normalizer": "lowercase"},
+        "uid":    {"type": "integer"},
+        "from":   {"type": "text"},
+        "sender": {"type": "text"},
+        "to":     {"type": "text"},
+        "cc":     {"type": "text"},
+        "bcc":    {"type": "text"},
+        "subject":{"type": "text"},
+        "body":   {"type": "text"},
+        "message-id":{"type": "keyword"},
+        "date":   {
+          "type": "date",
+          "format": "EEE, d LLL yyyy HH:mm:ss Z||yyyy-MM-dd HH:mm:ss||yyyy-MM-dd"
+        }
+      }
+    }
+  }

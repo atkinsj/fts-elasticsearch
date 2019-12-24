@@ -1,94 +1,136 @@
-# fts-elasticsearch
-fts-elasticsearch is a Dovecot full-text search indexing plugin that uses ElasticSearch as a backend.
+# fts-elastic
+fts-elastic is a [Dovecot full-text search](https://doc.dovecot.org/configuration_manual/fts/) indexing plugin that uses [ElasticSearch](https://www.elastic.co/) as a backend.
 
 Dovecot communicates to ES using HTTP/JSON queries. It supports automatic indexing and searching of e-mail.
+For mailboxes with more than 10000 messages it uses [elastic scroll API](https://www.elastic.co/guide/en/elasticsearch/reference/current/search-request-body.html#request-body-search-scroll).
 
 ## Requirements
 * Dovecot 2.2+
 * JSON-C
-* ElasticSearch 6.x for your server
+* ElasticSearch 6.x, 7.x
 * Autoconf 2.53+
-
-NOTE: You must add `-Des.xcontent.strict_duplicate_detection=false` to your Elasticsearch startup parameters. ES 7.0 will NOT be compatible with this plugin for now since this option will be deprecated.
 
 ## Compiling
 This plugin needs to compile against the Dovecot source for the version you intend to run it on. A dovecot-devel package is unfortunately insufficient as it does not include the required fts API header files. 
 
 You can provide the path to your source tree by passing --with-dovecot= to ./configure.
 
+Install dependencies
+
+    # sudo apt install dovecot
+    sudo apt install gcc make libjson-c-dev dovecot-dev
+
 An example build may look like:
 
     ./autogen.sh
-    ./configure --with-dovecot=/path/to/dovecot/src/root
+    ./configure --with-dovecot=/usr/lib/dovecot/
     make
     make install
+	  sudo ln -s /usr/lib/dovecot/lib21_fts_elastic_plugin.so /usr/lib/dovecot/modules/lib21_fts_elastic_plugin.so
 
 ## Configuration
-In dovecot/conf.d/10-mail.conf:
+Create /etc/dovecot/conf.d/90-fts.conf with content:
 
-	mail_plugins = fts fts_elasticsearch
-
-In dovecot/conf.d/90-plugins.conf:
+	mail_plugins = $mail_plugins fts fts_elastic
 
 	plugin {
-	  fts = elasticsearch
-	  fts_elasticsearch = debug url=http://localhost:9200/
-	  fts_autoindex = yes
+	  fts = elastic
+	  fts_elastic = debug url=http://localhost:9200/m/ bulk_size=5000000 refresh=fts rawlog_dir=/var/log/fts-elastic/
+
+    # no indexes new emails when user make search
+    # yes indexes every email when delivered
+	  fts_autoindex = no
+    fts_autoindex_exclude = \Junk
+    fts_autoindex_exclude2 = \Trash
 	}
 
-There are only two supported configuration parameters at the moment:
-* url=\<elasticsearch url\> Required base URL
+and (re)start dovecot:
+
+    dovecot stop; dovecot
+
+* url=\<elasticsearch url\> Required elastic URL with index name, must end with slash /
+* bulk_size=\<positive integer\> How large bulk requests we want to send to elastic in bytes (default=5000000)
+* refresh={fts,index,never} When you want to [refresh elastic index](https://www.elastic.co/guide/en/elasticsearch/reference/current/indices-refresh.html) so new emails will be searchable
+  * fts: when dovecot fts plugin calls it (typically before search)
+  * index: after each bulk update using ?refrest=true query param (create not effective indexes when combined with fts_autoindex=yes)
+  * never: leave it to elastic, indexed emails may not be searchable immediately
 * debug Enables HTTP debugging
+* rawlog_dir is directory where HTTP communication with elasticsearch server is written (useful for debugging plugin or elastic schema)
 
-## ElasticSearch Indicies
-fts-elasticsearch creates an index per mail box with a hardcoded type of 'mail'. It creates one field for each field in the e-mail header and for the body.
+## ElasticSearch index
+This plugin stores all message in one elastic index. You can use [sharding](https://www.elastic.co/guide/en/elasticsearch/reference/current/scalability.html) to support large numbers of users. Since it uses [routing key](https://www.elastic.co/guide/en/elasticsearch/reference/current/mapping-routing-field.html), updates and searches are accessing only one shard.
+_id is in the form "_id":"uid/mbox-guid/user@domain", example: "_id":"3/f40efa2f8f44ad54424000006e8130ae/filip.hanes@example.com"
 
-An example of pushed data for a basic e-mail with no attachments:
+You can setup [index mapping](https://www.elastic.co/guide/en/elasticsearch/reference/current/mapping.html) on Elasticsearch 6.x with command
 
-	{
-		"uid": 3,
-		"box": "f40efa2f8f44ad54424000006e8130ae",
-		"Return-Path": "<josh@localhost.localdomain>",
-		"X-Original-To": "josh",
-		"Delivered-To": "josh@localhost.localdomain",
-		"Received": "by localhost.localdomain (Postfix, from userid 1000) id 07DA3140314; Thu,  8 Jan 2015 00:20:05 +1100 (AEDT)",
-		"Date": "Thu, 08 Jan 2015 00:20:05 +1100",
-		"To": "josh@localhost.localdomain",
-		"Subject": "Test #3",
-		"User-Agent": "Heirloom mailx 12.5 7\/5\/10",
-		"MIME-Version": "1.0",
-		"Content-Type": "text\/plain; charset=us-ascii",
-		"Content-Transfer-Encoding": "7bit",
-		"Message-Id": "<20150107132005.07DA3140314@localhost.localdomain>",
-		"From": "josh <josh@localhost.localdomain>",
-		"body": "This is the body of test #3.\n"
-	}
+	curl -X PUT "http://elasticIP:9200/m?pretty" -H 'Content-Type: application/json' -d "@elastic6-schema.json"
+
+on Elasticsearch 7.x there is different date format parser, you need to use different schema:
+
+	curl -X PUT "http://elasticIP:9200/m?pretty" -H 'Content-Type: application/json' -d "@elastic7-schema.json"
+
+Fields box and user needs to be [keyword fields](https://www.elastic.co/guide/en/elasticsearch/reference/current/keyword.html), as you can see in file `elastic-schema.json`.
+In our schema there is [_source](https://www.elastic.co/guide/en/elasticsearch/reference/current/mapping-source-field.html) enabled because we don't see much storage savings when _source is disabled and elastic documentation doesn't recommend it either.
+This plugin doesn't use _source. It explicitly disables it in response queries, but you can use it for better management and insight to indexed emails or when you want to use elastic for other than dovecot fts (analysis, spammers detection, ...).
+In case of [elastic reindexing](https://www.elastic.co/guide/en/elasticsearch/reference/current/docs-reindex.html) _source will be needed.
+
+Any time you can reindex users mailbox with doveadm commands;
+
+```sh
+doveadm fts rescan -u user@example.com
+doveadm index -u user@domain -q '*'
+```
+
+An example of pushed document:
+```json
+{
+  "user": "filip.hanes@example.com",
+  "box": "f40efa2f8f44ad54424000006e8130ae",
+  "uid": 3,
+  "date": "Thu, 08 Jan 2015 00:20:05 +0000",
+  "from": "josh <josh@localhost.localdomain>",
+  "sender": "Filip Hanes",
+  "to": "<filip.hanes@example.com>",
+  "cc": "User <user@example.com>",
+  "bcc": "\"Test User\" <test@example.com>",
+  "subject": "Test #3",
+  "message-id": "<20150107132005.07DA3140314@example.com>",
+  "body": "This is the body of test #3.\n"
+}
+```
 
 An example search:
 
-	{
-	  "query": {
-	    "query_string": {
-	      "query": "*Dovecot*",
-	      "fields": [
-	        "subject"
-	      ]
-	    }
-	  },
-	  "fields": [
-	    "uid",
-	    "box"
-	  ]
-	}
+```sh
+curl -X POST "http://elasticIP:9200/m/_search?pretty" -H 'Content-Type: application/json' -d '
+{
+  "query": {
+    "bool": {
+      "filter": [
+        {"term": {"user": "filip.hanes@example.com"}},
+        {"term": {"box": "f40efa2f8f44ad54424000006e8130ae"}}
+      ],
+      "must": [
+        {
+          "multi_match": {
+            "query": "test",
+            "operator": "and",
+            "fields": ["from","to","cc","bcc","sender","subject","body"]
+          }
+        }
+      ]
+    }
+  },
+  "size": 100
+}
+'
+```
 
 ## TODO
-There are a number of things left to be implemented:
-* Rescan
-* Optimisation (if any)
+* user/mbox_guid parametrized url i.e.: url=http://127.0.0.1/m-%u/ would use index http://127.0.0.1/m-filip.hanes@example.com/
 * Multiple mailbox lookup (for clients that call lookup_multi; need to find one)
-
-## Background
-Dovecot currently supports two primary full text search indexing plugins `fts-solr` and `fts-squat`. I wanted to use an FTS service that I already had set-up and that wasn't quite as heavy as Solr, primarily to consolidate infrastructure and to focus resources on optimising our ES instances.
+* Optimisation (if any)
 
 ## Thanks
 This plugin borrows heavily from dovecot itself particularly for the automatic detection of dovecont-config (see m4/dovecot.m4). The fts-solr and fts-squat plugins were also used as reference material for understanding the Dovecot FTS API.
+FTS-lucene was used as reference for implementing proper rescan.
